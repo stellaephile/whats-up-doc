@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health-Hacker Frontend Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .test-section { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        input, button { padding: 10px; margin: 5px; font-size: 16px; }
+        button { background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        .result { margin-top: 10px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>🏥 Health-Hacker Frontend Test</h1>
+    
+    <div class="test-section">
+        <h2>API Test</h2>
+        <p>Test the backend API directly:</p>
+        
+        <div>
+            <label>Pincode:</label>
+            <input type="text" id="test-pincode" placeholder="110023" maxlength="6">
+            
+            <label>Condition:</label>
+            <input type="text" id="test-condition" placeholder="fever">
+            
+            <button onclick="testAPI()">Test API</button>
+        </div>
+        
+        <div id="api-result" class="result" style="display: none;"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Frontend Integration Test</h2>
+        <p>Test if the React frontend is working:</p>
+        
+        <div>
+            <p><strong>Instructions:</strong></p>
+            <ol>
+                <li>Open <a href="http://localhost:3001" target="_blank">http://localhost:3001</a></li>
+                <li>Enter pincode: <code>110023</code> (Delhi) or <code>500001</code> (Hyderabad)</li>
+                <li>Enter condition: <code>fever</code> or <code>heart checkup</code></li>
+                <li>Click Search</li>
+                <li>Should transition to Phase 2 with map and hospital results</li>
+            </ol>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test Cases</h2>
+        <table border="1" style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <th>Pincode</th>
+                <th>City</th>
+                <th>Condition</th>
+                <th>Expected Result</th>
+            </tr>
+            <tr>
+                <td>110023</td>
+                <td>Delhi</td>
+                <td>fever</td>
+                <td>4 Delhi hospitals (AIIMS, G.B. Pant, RML, Max Saket)</td>
+            </tr>
+            <tr>
+                <td>500001</td>
+                <td>Hyderabad</td>
+                <td>fever</td>
+                <td>1 real hospital (Care Hospital, Banjara)</td>
+            </tr>
+            <tr>
+                <td>110023</td>
+                <td>Delhi</td>
+                <td>heart checkup</td>
+                <td>Delhi hospitals with cardiology focus</td>
+            </tr>
+            <tr>
+                <td>560001</td>
+                <td>Bangalore</td>
+                <td>emergency</td>
+                <td>Fallback Bangalore hospitals</td>
+            </tr>
+        </table>
+    </div>
+
+    <script>
+        async function testAPI() {
+            const pincode = document.getElementById('test-pincode').value || '110023';
+            const condition = document.getElementById('test-condition').value || 'fever';
+            const resultDiv = document.getElementById('api-result');
+            
+            try {
+                resultDiv.style.display = 'block';
+                resultDiv.innerHTML = 'Testing API...';
+                
+                const response = await fetch(`http://localhost:3000/api/hospitals/recommend?condition=${encodeURIComponent(condition)}&pincode=${pincode}`);
+                const data = await response.json();
+                
+                if (data.totalFound > 0) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <h3>✅ Success!</h3>
+                        <p><strong>Found:</strong> ${data.totalFound} hospitals</p>
+                        <p><strong>First hospital:</strong> ${data.recommendations[0].name}</p>
+                        <p><strong>Category:</strong> ${data.recommendations[0].category}</p>
+                        <p><strong>Address:</strong> ${data.recommendations[0].address}</p>
+                        <p><strong>Phone:</strong> ${data.recommendations[0].phone}</p>
+                    `;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `
+                        <h3>❌ No hospitals found</h3>
+                        <p>API returned 0 hospitals for pincode ${pincode}</p>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `
+                    <h3>❌ API Error</h3>
+                    <p>Error: ${error.message}</p>
+                    <p>Make sure backend is running on http://localhost:3000</p>
+                `;
+            }
+        }
+        
+        // Auto-test on page load
+        window.onload = function() {
+            testAPI();
+        };
+    </script>
+</body>
+</html>
