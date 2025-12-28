@@ -14,7 +14,7 @@ class MCPHospitalService {
         districts: ['Mumbai', 'Mumbai Suburban', 'Thane']
       },
       'Delhi': {
-        state: 'Delhi',
+        state: 'NCT of Delhi',
         coordinates: { latitude: 28.6139, longitude: 77.2090 },
         districts: ['New Delhi', 'Central Delhi', 'North Delhi', 'South Delhi', 'East Delhi', 'West Delhi']
       },
@@ -59,6 +59,111 @@ class MCPHospitalService {
     return null;
   }
 
+  async findHospitalsByPincode(condition, pincode, location = null) {
+    try {
+      const city = this.mapPincodeToCity(pincode);
+      
+      if (!city) {
+        return {
+          hospitals: [],
+          message: `Pincode ${pincode} is not currently supported. We support major cities like Mumbai (400xxx), Delhi (110xxx), Bangalore (560xxx), Hyderabad (500xxx), Chennai (600xxx), and Lucknow (226xxx, 260xxx, 261xxx).`
+        };
+      }
+
+      const hospitals = await this.getHospitalsByCity(city);
+      
+      if (!hospitals || hospitals.length === 0) {
+        console.log(`No hospitals found from API for ${city}`);
+        
+        // Provide city-specific guidance when no data is available
+        let cityGuidance = '';
+        if (city === 'Delhi') {
+          cityGuidance = ' Delhi hospitals may not be fully covered in the current government database. Try searching for nearby areas like Gurgaon (122xxx) or Noida (201xxx), or contact Delhi Health Department at 011-23921401.';
+        } else if (city === 'Mumbai') {
+          cityGuidance = ' Try nearby areas like Thane (400601) or contact Mumbai Municipal Corporation Health Department.';
+        } else if (city === 'Bangalore') {
+          cityGuidance = ' Try nearby areas or contact Karnataka Health Department.';
+        } else if (city === 'Chennai') {
+          cityGuidance = ' Try nearby areas or contact Tamil Nadu Health Department.';
+        } else if (city === 'Lucknow') {
+          cityGuidance = ' Try nearby areas or contact Uttar Pradesh Health Department.';
+        }
+        
+        return {
+          hospitals: [],
+          message: `No hospitals found in our live database for ${city}.${cityGuidance} For emergencies, call 102 for ambulance service or 108 for emergency medical response.`
+        };
+      }
+      
+      const pincodeArea = pincode.substring(0, 3);
+      let pincodeFilteredHospitals = hospitals.filter(hospital => {
+        if (!hospital.pincode) return false;
+        const hospitalPincode = hospital.pincode.toString();
+        return hospitalPincode === pincode || hospitalPincode.startsWith(pincodeArea);
+      });
+      
+      if (pincodeFilteredHospitals.length === 0) {
+        pincodeFilteredHospitals = hospitals.slice(0, 20);
+      }
+      
+      return {
+        hospitals: pincodeFilteredHospitals.slice(0, 10),
+        message: null
+      };
+      
+    } catch (error) {
+      console.error('Hospital search error:', error);
+      return {
+        hospitals: [],
+        message: `Unable to fetch hospital data: ${error.message}. Please try again.`
+      };
+    }
+  }
+
+  async getEmergencyHospitalsByPincode(pincode, location = null) {
+    try {
+      const city = this.mapPincodeToCity(pincode);
+      
+      if (!city) {
+        return {
+          hospitals: [],
+          message: `Emergency services not available for pincode ${pincode}. Call 102 for immediate ambulance service.`
+        };
+      }
+
+      const hospitals = await this.getHospitalsByCity(city);
+      
+      if (!hospitals || hospitals.length === 0) {
+        return {
+          hospitals: [],
+          message: `No emergency hospitals found. Call 102 immediately for ambulance service.`
+        };
+      }
+
+      let emergencyHospitals = hospitals.filter(hospital => 
+        hospital.emergencyServices || 
+        hospital.name.toLowerCase().includes('emergency') ||
+        hospital.name.toLowerCase().includes('trauma')
+      );
+
+      if (emergencyHospitals.length === 0) {
+        emergencyHospitals = hospitals.slice(0, 10);
+      }
+
+      return {
+        hospitals: emergencyHospitals.slice(0, 5),
+        message: null
+      };
+      
+    } catch (error) {
+      console.error('Emergency hospital search error:', error);
+      return {
+        hospitals: [],
+        message: `Emergency service error. Call 102 immediately for ambulance service.`
+      };
+    }
+  }
+
   async getHospitalsByCity(city) {
     try {
       const cityInfo = this.availableCities[city];
@@ -70,14 +175,7 @@ class MCPHospitalService {
         '_t': Date.now()
       });
 
-      const response = await fetch(`${this.baseUrl}?${params}`, {
-        method: 'GET',
-        headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        }
-      });
+      const response = await fetch(`${this.baseUrl}?${params}`);
       
       if (!response.ok) {
         throw new Error(`API request failed: ${response.status}`);
@@ -89,7 +187,6 @@ class MCPHospitalService {
       let hospitals = this.processHospitalData(data.records || []);
       hospitals = hospitals.filter(hospital => this.isInCity(hospital, city));
       
-      console.log(`Filtered to ${hospitals.length} hospitals in ${city}`);
       return hospitals;
       
     } catch (error) {
@@ -154,106 +251,6 @@ class MCPHospitalService {
     const town = (hospital.town || '').toLowerCase();
     
     return address.includes(cityLower) || name.includes(cityLower) || town.includes(cityLower);
-  }
-
-  async findHospitalsByPincode(condition, pincode, location = null) {
-    try {
-      const city = this.mapPincodeToCity(pincode);
-      
-      if (!city) {
-        return {
-          hospitals: [],
-          message: `Pincode ${pincode} is not currently supported. We support major cities like Mumbai (400xxx), Delhi (110xxx), Bangalore (560xxx), Hyderabad (500xxx), Chennai (600xxx), and Lucknow (226xxx, 260xxx, 261xxx).`
-        };
-      }
-
-      const hospitals = await this.getHospitalsByCity(city);
-      
-      if (!hospitals || hospitals.length === 0) {
-        return {
-          hospitals: [],
-          message: `No hospitals found in our live database for ${city}. Please try a nearby pincode or call 102 for emergency services.`
-        };
-      }
-      
-      const pincodeArea = pincode.substring(0, 3);
-      let pincodeFilteredHospitals = hospitals.filter(hospital => {
-        if (!hospital.pincode) return false;
-        const hospitalPincode = hospital.pincode.toString();
-        return hospitalPincode === pincode || hospitalPincode.startsWith(pincodeArea);
-      });
-      
-      if (pincodeFilteredHospitals.length === 0) {
-        pincodeFilteredHospitals = hospitals.slice(0, 20);
-      }
-      
-      return {
-        hospitals: pincodeFilteredHospitals.slice(0, 10),
-        message: null
-      };
-      
-    } catch (error) {
-      console.error('Hospital search error:', error);
-      return {
-        hospitals: [],
-        message: `Unable to fetch hospital data: ${error.message}. Please try again.`
-      };
-    }
-  }
-
-  async getEmergencyHospitalsByPincode(pincode, location = null) {
-    try {
-      const city = this.mapPincodeToCity(pincode);
-      
-      if (!city) {
-        return {
-          hospitals: [],
-          message: `Emergency services not available for pincode ${pincode}. Call 102 for immediate ambulance service.`
-        };
-      }
-
-      const hospitals = await this.getHospitalsByCity(city);
-      
-      if (!hospitals || hospitals.length === 0) {
-        return {
-          hospitals: [],
-          message: `No emergency hospitals found. Call 102 immediately for ambulance service.`
-        };
-      }
-
-      let emergencyHospitals = hospitals.filter(hospital => 
-        hospital.emergencyServices || 
-        hospital.name.toLowerCase().includes('emergency') ||
-        hospital.name.toLowerCase().includes('trauma')
-      );
-
-      if (emergencyHospitals.length === 0) {
-        emergencyHospitals = hospitals.slice(0, 10);
-      }
-
-      const pincodeArea = pincode.substring(0, 3);
-      let pincodeFilteredHospitals = emergencyHospitals.filter(hospital => {
-        if (!hospital.pincode) return false;
-        const hospitalPincode = hospital.pincode.toString();
-        return hospitalPincode === pincode || hospitalPincode.startsWith(pincodeArea);
-      });
-
-      if (pincodeFilteredHospitals.length === 0) {
-        pincodeFilteredHospitals = emergencyHospitals;
-      }
-      
-      return {
-        hospitals: pincodeFilteredHospitals.slice(0, 5),
-        message: null
-      };
-      
-    } catch (error) {
-      console.error('Emergency hospital search error:', error);
-      return {
-        hospitals: [],
-        message: `Emergency service error. Call 102 immediately for ambulance service.`
-      };
-    }
   }
 
   determineCategory(record) {
