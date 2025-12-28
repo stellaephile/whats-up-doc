@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "API Postman Testing",
+  "description": "Monitors Health-Hacker API source code changes and automatically runs Postman collection tests to validate functionality",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "backend/src/**/*.js",
+      "backend/src/api/*.js",
+      "backend/src/services/*.js",
+      "backend/src/config/*.js",
+      "backend/package.json",
+      "backend/.env",
+      "backend/app.js"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Health-Hacker API source code has been modified. Please retrieve the contents of the .postman.json file. If the file does not exist or is empty, create a Postman collection for the Health-Hacker API with tests for the hospital endpoints. If it exists, get the collection ID and run the collection, showing me the results and propose fixes for any errors found."
+  }
+}
