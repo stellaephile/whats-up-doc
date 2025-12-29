@@ -178,7 +178,7 @@ function App() {
     setRecommendations([]); // Clear previous results
 
     try {
-      let endpoint = '/api/hospitals/recommend';
+      let endpoint = 'https://whats-up-doc-c12s.onrender.com/api/hospitals/recommend';
       const params = new URLSearchParams({
         condition: condition,
         pincode: pincode,
@@ -187,7 +187,7 @@ function App() {
       });
 
       if (isEmergency) {
-        endpoint = '/api/hospitals/emergency';
+        endpoint = 'https://whats-up-doc-c12s.onrender.com/api/hospitals/emergency';
       }
 
       const response = await axios.get(`${endpoint}?${params}`, {
