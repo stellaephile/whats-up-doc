@@ -20,11 +20,12 @@ const PORT = process.env.PORT || 3000;
 app.use(helmet());
 app.use(compression());
 
-// CORS configuration
+// Updated CORS configuration
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: process.env.CORS_ORIGIN || 'https://whatsup-doc.netlify.app',
+  methods: ['GET', 'POST', 'OPTIONS'], // Added OPTIONS for the "preflight" request
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'], // Added Cache-Control
+  credentials: true
 }));
 
 // Rate limiting
