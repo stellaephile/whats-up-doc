@@ -20,12 +20,14 @@ const PORT = process.env.PORT || 3000;
 app.use(helmet());
 app.use(compression());
 
-// Updated CORS configuration
+// The "Final Boss" CORS Config
 app.use(cors({
   origin: process.env.CORS_ORIGIN || 'https://whatsup-doc.netlify.app',
-  methods: ['GET', 'POST', 'OPTIONS'], // Added OPTIONS for the "preflight" request
-  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'], // Added Cache-Control
-  credentials: true
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  // This line is the fix for the "Pragma" and "Cache-Control" errors
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'Cache-Control', 'Pragma'],
+  credentials: true,
+  optionsSuccessStatus: 200 // Some legacy browsers choke on 204
 }));
 
 // Rate limiting
