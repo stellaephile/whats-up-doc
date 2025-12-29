@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-
+const isLocal = window.location.hostname === 'localhost';
+const BASE_URL = isLocal 
+      ? 'http://localhost:10000' 
+      : 'https://whats-up-doc-c12s.onrender.com';
 function App() {
   const [currentPhase, setCurrentPhase] = useState(1);
   const [pincode, setPincode] = useState('');
@@ -176,19 +179,22 @@ function App() {
 
     setLoading(true);
     setRecommendations([]); // Clear previous results
-
+    
     try {
-      let endpoint = 'https://whats-up-doc-c12s.onrender.com/api/hospitals/recommend';
-      const params = new URLSearchParams({
-        condition: condition,
-        pincode: pincode,
-        // Add timestamp to prevent caching
-        _t: Date.now()
-      });
-
-      if (isEmergency) {
-        endpoint = 'https://whats-up-doc-c12s.onrender.com/api/hospitals/emergency';
-      }
+        // Use the dynamic BASE_URL here
+        let endpoint = `${BASE_URL}/api/hospitals/recommend`;
+        
+        const params = new URLSearchParams({
+            condition: condition,
+            pincode: pincode,
+            _t: Date.now()
+        });
+    
+        if (isEmergency) {
+            endpoint = `${BASE_URL}/api/hospitals/emergency`;
+        }
+    
+    // Example: const response = await axios.get(`${endpoint}?${params}`);
 
       const response = await axios.get(`${endpoint}?${params}`, {
         // Disable axios caching
