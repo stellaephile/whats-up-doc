@@ -21,7 +21,9 @@ Instead of diagnosing diseases, the system:
 
 Our goal:
 👉 Reduce unnecessary hospital visits
+
 👉 Improve emergency response
+
 👉 Enable smarter healthcare decisions
 
 ---
