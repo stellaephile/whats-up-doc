@@ -1,26 +1,14 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { sampleHospitals, sampleEmergencyHospitals } from './sampleData';
 import { assessmentService } from './symptomAssessment';
 import { 
   routingConfig, 
-  progressiveSearch, 
-  enrichAndSortFacilities, 
   getSeverityBadge,
   getExpansionMessage 
 } from './facilityRouting';
 
-// Pincode to coordinates mapping (sample data)
-const pincodeCoordinates = {
-  '560001': { lat: 12.9716, lng: 77.5946, area: 'MG Road, Bangalore' },
-  '560002': { lat: 12.9822, lng: 77.5985, area: 'Shivaji Nagar, Bangalore' },
-  '560003': { lat: 12.9634, lng: 77.6089, area: 'Ulsoor, Bangalore' },
-  '560038': { lat: 12.9784, lng: 77.6408, area: 'Indiranagar, Bangalore' },
-  '560095': { lat: 12.9352, lng: 77.6245, area: 'Koramangala, Bangalore' },
-  '560076': { lat: 12.9100, lng: 77.5950, area: 'Bannerghatta Road, Bangalore' },
-  '560066': { lat: 12.9698, lng: 77.7499, area: 'Whitefield, Bangalore' },
-  '560041': { lat: 12.9250, lng: 77.5838, area: 'Jayanagar, Bangalore' }
-};
+// API Base URL
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
 function AppWithSymptoms() {
   // Phase management: 1 = landing page with pincode + symptoms, 2 = results
@@ -35,7 +23,7 @@ function AppWithSymptoms() {
   const [map, setMap] = useState(null);
   const [searchRadius, setSearchRadius] = useState(null);
   const markersRef = useRef([]);
-  const [useSampleData, setUseSampleData] = useState(true);
+  const [useSampleData, setUseSampleData] = useState(false); // Changed to false - use real DB
   const [expansionMessage, setExpansionMessage] = useState(null);
   
   // Filter states
@@ -46,6 +34,28 @@ function AppWithSymptoms() {
   // Emergency detection state
   const [showEmergencyWarning, setShowEmergencyWarning] = useState(false);
   const [emergencyKeywordsDetected, setEmergencyKeywordsDetected] = useState([]);
+  
+  // Database stats
+  const [dbStats, setDbStats] = useState(null);
+
+  // Fetch database stats on mount
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        console.log('Fetching stats from:', `${API_BASE_URL}/api/hospitals/stats`);
+        const response = await axios.get(`${API_BASE_URL}/api/hospitals/stats`);
+        console.log('Stats received:', response.data);
+        setDbStats(response.data);
+      } catch (error) {
+        console.error('Error fetching database stats:', error);
+        console.error('API_BASE_URL:', API_BASE_URL);
+        console.error('Error details:', error.response?.data || error.message);
+        // Don't show error to user, just log it
+      }
+    };
+    
+    fetchStats();
+  }, []);
 
   // Filter and prioritize hospitals based on government preference
   const getFilteredAndPrioritizedHospitals = (hospitals, severityLevel) => {
@@ -84,6 +94,8 @@ function AppWithSymptoms() {
   const handleSearch = async (e) => {
     if (e) e.preventDefault();
     
+    console.log('🔍 Search initiated:', { pincode, condition, API_BASE_URL });
+    
     if (!pincode || pincode.length !== 6) {
       alert('Please enter a valid 6-digit pincode');
       return;
@@ -101,7 +113,9 @@ function AppWithSymptoms() {
 
     try {
       // Step 1: Assess symptoms to get severity
+      console.log('Step 1: Assessing symptoms...');
       const assessment = await assessmentService.assess(selectedSymptoms, condition);
+      console.log('Assessment result:', assessment);
       setAssessmentResult(assessment);
       
       // Step 2: Check if emergency was auto-detected
@@ -117,74 +131,23 @@ function AppWithSymptoms() {
         }, 100);
       }
 
-      // Step 2: Get pincode coordinates (centroid of the area)
-      const pincodeData = pincodeCoordinates[pincode];
-      if (!pincodeData && !useSampleData) {
-        alert('Pincode not found. Please try a different pincode.');
+      // Step 3: Get pincode coordinates from backend
+      console.log('Step 2: Fetching pincode coordinates from:', `${API_BASE_URL}/api/pincode/${pincode}`);
+      const pincodeResponse = await axios.get(`${API_BASE_URL}/api/pincode/${pincode}`);
+      console.log('Pincode response:', pincodeResponse.data);
+      
+      if (!pincodeResponse.data || !pincodeResponse.data.latitude) {
+        alert('Pincode not found in our database. Please try a different pincode.');
         setLoading(false);
         return;
       }
 
-      // Use default coordinates if pincode not in our sample data
-      const centerLat = pincodeData?.lat || 12.9716;
-      const centerLng = pincodeData?.lng || 77.5946;
+      const centerLat = parseFloat(pincodeResponse.data.latitude);
+      const centerLng = parseFloat(pincodeResponse.data.longitude);
 
-      // Use sample data if toggle is enabled
-      if (useSampleData) {
-        setTimeout(() => {
-          // Get all hospitals based on severity
-          const allHospitals = assessment.severityLevel === 'emergency' 
-            ? sampleEmergencyHospitals 
-            : sampleHospitals;
-          
-          // Enrich with distances from pincode centroid
-          const enriched = enrichAndSortFacilities(allHospitals, centerLat, centerLng);
-          
-          // Apply severity-based routing with progressive search
-          const searchResult = progressiveSearch(enriched, assessment.severityLevel);
-          
-          // Check if no facilities found within 20km
-          if (searchResult.facilities.length === 0) {
-            // No facilities found even after expanding to 20km
-            setRecommendations([]);
-            setSearchRadius(20);
-            setExpansionMessage(getExpansionMessage(20, null));
-            setCurrentPhase(2);
-            setLoading(false);
-            return;
-          }
-          
-          // Apply government prioritization for mild to moderate cases
-          const prioritized = getFilteredAndPrioritizedHospitals(
-            searchResult.facilities, 
-            assessment.severityLevel
-          );
-          
-          setRecommendations(prioritized);
-          setSearchRadius(searchResult.radiusUsed);
-          
-          // Show expansion message if radius was expanded
-          if (searchResult.wasExpanded) {
-            const config = routingConfig[assessment.severityLevel];
-            setExpansionMessage(getExpansionMessage(config.initialRadius, searchResult.radiusUsed));
-          } else {
-            setExpansionMessage(null); // Clear any previous message
-          }
-          
-          setCurrentPhase(2);
-          setLoading(false);
-          
-          // Initialize map after phase transition
-          setTimeout(() => {
-            initializeMap(searchResult.facilities, searchResult.radiusUsed, centerLat, centerLng, assessment);
-          }, 100);
-        }, 800);
-        return;
-      }
-
-      // API call logic (for future backend integration)
-      const endpoint = '/api/hospitals/severity-based';
-      const response = await axios.post(endpoint, {
+      // Step 4: Call backend API for severity-based hospital search
+      console.log('Step 3: Searching hospitals...');
+      const response = await axios.post(`${API_BASE_URL}/api/hospitals/severity-based`, {
         pincode,
         latitude: centerLat,
         longitude: centerLng,
@@ -193,25 +156,71 @@ function AppWithSymptoms() {
         specialties: assessment.specialties
       });
       
+      console.log('Hospital search response:', response.data);
       const searchResult = response.data;
-      setRecommendations(searchResult.facilities);
+      
+      // Transform DB results to match frontend format
+      const transformedFacilities = searchResult.facilities.map(hospital => ({
+        id: hospital.id,
+        name: hospital.hospital_name,
+        facility_type: hospital.hospital_care_type,
+        category: hospital.hospital_category,
+        isGovernment: hospital.hospital_category?.toLowerCase().includes('gov') || 
+                      hospital.hospital_category?.toLowerCase().includes('public'),
+        isAyush: hospital.ayush || hospital.discipline?.toLowerCase().includes('ayush'),
+        address: hospital.address || `${hospital.district}, ${hospital.state}`,
+        phone: hospital.emergency_num || hospital.telephone || hospital.mobile_number,
+        emergency_num: hospital.emergency_num,
+        ambulance_phone: hospital.ambulance_phone,
+        bloodbank_phone: hospital.bloodbank_phone,
+        telephone: hospital.telephone,
+        mobile_number: hospital.mobile_number,
+        latitude: hospital.latitude,
+        longitude: hospital.longitude,
+        distance_km: hospital.distance_km,
+        specialties: hospital.specialties_array || [],
+        facilities: hospital.facilities_array || [],
+        total_beds: hospital.total_beds,
+        emergency_available: hospital.emergency_available,
+        data_quality: hospital.data_quality_norm
+      }));
+      
+      setRecommendations(transformedFacilities);
       setSearchRadius(searchResult.radiusUsed);
       
+      // Show expansion message if radius was expanded
       if (searchResult.wasExpanded) {
-        setExpansionMessage(searchResult.expansionMessage);
+        const config = routingConfig[assessment.severityLevel];
+        setExpansionMessage(getExpansionMessage(config.initialRadius, searchResult.radiusUsed));
+      } else {
+        setExpansionMessage(null);
       }
       
-      if (searchResult.facilities.length > 0) {
-        setCurrentPhase(2);
-        setTimeout(() => {
-          initializeMap(searchResult.facilities, searchResult.radiusUsed, centerLat, centerLng, assessment);
-        }, 100);
-      } else {
+      // Check if no facilities found within 20km
+      if (transformedFacilities.length === 0) {
         setExpansionMessage(getExpansionMessage(20, null));
+        setCurrentPhase(2);
+        setLoading(false);
+        return;
       }
+      
+      setCurrentPhase(2);
+      
+      // Initialize map after phase transition
+      setTimeout(() => {
+        initializeMap(transformedFacilities, searchResult.radiusUsed, centerLat, centerLng, assessment);
+      }, 100);
+      
     } catch (error) {
       console.error('Error searching hospitals:', error);
-      alert('Unable to find hospitals. Please try again.');
+      
+      if (error.response?.status === 404) {
+        alert('Pincode not found in our database. Please try a different pincode.');
+      } else if (error.response?.status === 500) {
+        alert('Database connection error. Please ensure the backend server is running.');
+      } else {
+        alert('Unable to find hospitals. Please try again or check your internet connection.');
+      }
     } finally {
       setLoading(false);
     }
@@ -421,6 +430,31 @@ function AppWithSymptoms() {
               <h1 className="text-3xl md:text-5xl lg:text-[54px] font-bold text-slate-900 dark:text-white tracking-tight leading-[1.1]">
                 Healthcare, <span className="text-primary">right where you are.</span>
               </h1>
+              
+              {/* Database Stats Banner */}
+              {dbStats && (
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 text-sm">
+                  <span className="material-symbols-outlined text-blue-600 text-[18px]">database</span>
+                  <span className="text-slate-700 font-medium">
+                    Searching across <span className="font-bold text-blue-600">{dbStats.total?.toLocaleString()}</span> verified hospitals
+                    {dbStats.government > 0 && (
+                      <span className="text-slate-600"> • {dbStats.government?.toLocaleString()} Govt</span>
+                    )}
+                    {dbStats.emergency > 0 && (
+                      <span className="text-slate-600"> • {dbStats.emergency?.toLocaleString()} Emergency</span>
+                    )}
+                  </span>
+                </div>
+              )}
+              
+              {/* Debug: Show API URL */}
+              {!dbStats && (
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-yellow-50 border border-yellow-200 text-sm">
+                  <span className="text-yellow-700 font-medium">
+                    ⚠️ Connecting to API: {API_BASE_URL}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Form */}
@@ -763,18 +797,18 @@ function AppWithSymptoms() {
             ) : (
               getFilteredAndPrioritizedHospitals(recommendations, assessmentResult.severityLevel).map((hospital, index) => {
                 const isGovernment = hospital.isGovernment || hospital.category?.toLowerCase().includes('government');
-                const isAyush = hospital.category?.toLowerCase().includes('ayush');
+                const isAyush = hospital.isAyush || hospital.category?.toLowerCase().includes('ayush');
                 const hospitalTypeColor = isGovernment ? 'text-blue-600' : isAyush ? 'text-green-600' : 'text-red-600';
                 const hospitalTypeBg = isGovernment ? 'bg-blue-500' : isAyush ? 'bg-green-500' : 'bg-red-500';
                 const hospitalTypeLabel = isGovernment ? 'Sarkari' : isAyush ? 'AYUSH' : 'Private';
                 
                 return (
                   <div 
-                    key={index}
+                    key={hospital.id || index}
                     className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm hover:shadow-md transition-all cursor-pointer"
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
-                      <h4 className="font-bold text-slate-900">{hospital.name}</h4>
+                      <h4 className="font-bold text-slate-900 text-sm leading-tight">{hospital.name}</h4>
                       <div className="flex flex-col items-end gap-1">
                         <span 
                           className="px-2 py-1 rounded text-xs font-bold whitespace-nowrap"
@@ -791,26 +825,81 @@ function AppWithSymptoms() {
                             ⭐ Prioritized
                           </span>
                         )}
+                        {/* Emergency Badge */}
+                        {hospital.emergency_available && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700">
+                            🚨 24x7 Emergency
+                          </span>
+                        )}
                       </div>
                     </div>
                     
                     <div className="flex items-center gap-2 mb-2">
                       <span className={`size-2 rounded-full ${hospitalTypeBg}`}></span>
                       <span className={`text-xs font-semibold ${hospitalTypeColor} uppercase tracking-wider`}>{hospitalTypeLabel}</span>
+                      {hospital.total_beds && (
+                        <span className="text-xs text-slate-500 ml-auto">🛏️ {hospital.total_beds} beds</span>
+                      )}
                     </div>
                     
                     <p className="text-sm text-slate-600 mb-3">{hospital.address}</p>
                     
-                    <div className="flex items-center justify-between">
+                    {/* Specialties */}
+                    {hospital.specialties && hospital.specialties.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-3">
+                        {hospital.specialties.slice(0, 3).map((specialty, idx) => (
+                          <span key={idx} className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full">
+                            {specialty}
+                          </span>
+                        ))}
+                        {hospital.specialties.length > 3 && (
+                          <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full">
+                            +{hospital.specialties.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center justify-between mb-2">
                       <span className="text-xs text-slate-500">
                         📍 {hospital.distance_km ? hospital.distance_km.toFixed(1) : '?'} km away
                       </span>
-                      {hospital.phone && (
+                    </div>
+                    
+                    {/* Call Buttons */}
+                    <div className="flex flex-wrap gap-2">
+                      {hospital.emergency_num && (
                         <a
-                          href={`tel:${hospital.phone}`}
-                          className="px-3 py-1.5 bg-primary hover:bg-primary-dark text-white text-xs font-semibold rounded-lg transition-colors"
+                          href={`tel:${hospital.emergency_num}`}
+                          className="flex-1 min-w-[100px] px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
                         >
+                          <span className="material-symbols-outlined text-[14px]">emergency</span>
+                          Emergency
+                        </a>
+                      )}
+                      {hospital.ambulance_phone && (
+                        <a
+                          href={`tel:${hospital.ambulance_phone}`}
+                          className="flex-1 min-w-[100px] px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
+                        >
+                          🚑 Ambulance
+                        </a>
+                      )}
+                      {hospital.telephone && !hospital.emergency_num && (
+                        <a
+                          href={`tel:${hospital.telephone}`}
+                          className="flex-1 min-w-[100px] px-3 py-1.5 bg-primary hover:bg-primary-dark text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">call</span>
                           Call
+                        </a>
+                      )}
+                      {hospital.bloodbank_phone && (
+                        <a
+                          href={`tel:${hospital.bloodbank_phone}`}
+                          className="px-3 py-1.5 bg-pink-600 hover:bg-pink-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1"
+                        >
+                          🩸 Blood Bank
                         </a>
                       )}
                     </div>
