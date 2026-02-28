@@ -6,14 +6,14 @@
 export const routingConfig = {
   mild: {
     level: 'Mild',
-    facilityTypes: ['PHC', 'Dispensary', 'Health Centre'],
+    facilityTypes: ['PHC', 'Dispensary', 'Health Centre','Diagnostic Centre'],
     initialRadius: 3,
     color: '#10b981', // green
     icon: '🟢'
   },
   moderate: {
     level: 'Moderate',
-    facilityTypes: ['Clinic', 'Nursing Home', 'Hospital'],
+    facilityTypes: ['Clinic', 'Nursing Home', 'Hospital','Diagnostic Centre'],
     initialRadius: 5,
     color: '#f59e0b', // yellow/orange
     icon: '🟡'
