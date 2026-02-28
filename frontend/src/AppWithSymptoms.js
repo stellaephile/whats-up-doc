@@ -62,7 +62,11 @@ function AppWithSymptoms() {
     // First, filter by checkboxes
     let filtered = hospitals.filter(hospital => {
       const isGovernment = hospital.isGovernment || hospital.category?.toLowerCase().includes('government');
-      const isAyush = hospital.category?.toLowerCase().includes('ayush');
+      const isAyush =
+    hospital.ayush === true ||
+    hospital.discipline_clean?.some(d =>
+      ['Ayurveda', 'Homeopathy', 'Unani', 'Siddha', 'Naturopathy', 'Yoga'].includes(d)
+    );
       const isPrivate = !isGovernment && !isAyush;
 
       if (isGovernment && !showSarkari) return false;

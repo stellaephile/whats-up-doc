@@ -44,7 +44,7 @@ cur.execute("""
     SELECT
         hospital_care_type,
         COUNT(*) as count,
-        MIN(ROUND((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2)) as min_distance
+        MIN((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) as min_distance
     FROM hospitals
     WHERE ST_DWithin(location, ST_MakePoint(%s, %s)::geography, 10000)
         AND location IS NOT NULL
@@ -93,7 +93,7 @@ print("=" * 60)
 cur.execute("""
     SELECT
         hospital_name, hospital_care_type, hospital_category,
-        ROUND((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
+        (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
     FROM hospitals
     WHERE ST_DWithin(location, ST_MakePoint(%s, %s)::geography, 10000)
         AND location IS NOT NULL
