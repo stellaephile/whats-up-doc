@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <title>What's Up Doc - Healthcare Navigation</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#10b981",     // Health Green (Emerald 500) - AYUSH & Brand
+            "primary-dark": "#059669", // Emerald 600
+            "accent": "#FA8072",      // Salmon Pink
+            "accent-dark": "#E97467",  // Darker Salmon
+            "govt": "#2563EB",        // Blue for Government/Sarkari
+            "private": "#EF4444",     // Red for Private
+            "ayush": "#10b981",       // Green for AYUSH (Same as primary)
+            "background-light": "#f8fafc",
+            "background-dark": "#101922",
+            "surface-light": "#ffffff",
+            "surface-dark": "#1a2632",
+          },
+          fontFamily: {
+            "display": ["Inter", "sans-serif"]
+          },
+          borderRadius: { 
+            "DEFAULT": "0.25rem", 
+            "lg": "0.5rem", 
+            "xl": "0.75rem", 
+            "2xl": "1rem", 
+            "full": "9999px" 
+          },
+        },
+      },
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+    }
+    
+    /* Custom Leaflet Map Styles - Optimized for Carto Positron */
+    .leaflet-container {
+      font-family: 'Inter', sans-serif;
+      background: #f8fafc;
+    }
+    
+    .dark .leaflet-container {
+      background: #0f172a;
+    }
+    
+    .custom-hospital-marker {
+      background: transparent !important;
+      border: none !important;
+    }
+    
+    .custom-popup .leaflet-popup-content-wrapper {
+      border-radius: 12px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      border: 1px solid #e2e8f0;
+      background: white;
+    }
+    
+    .dark .custom-popup .leaflet-popup-content-wrapper {
+      background: #1e293b;
+      border-color: #475569;
+    }
+    
+    .custom-popup .leaflet-popup-content {
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+      color: #1e293b;
+    }
+    
+    .dark .custom-popup .leaflet-popup-content {
+      color: #e2e8f0;
+    }
+    
+    .custom-popup .leaflet-popup-tip {
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-top: none;
+      border-right: none;
+    }
+    
+    .dark .custom-popup .leaflet-popup-tip {
+      background: #1e293b;
+      border-color: #475569;
+    }
+    
+    .map-tiles {
+      filter: brightness(1.0) contrast(1.05);
+    }
+    
+    .dark .map-tiles {
+      filter: brightness(0.6) contrast(1.3) hue-rotate(200deg) saturate(0.8);
+    }
+    
+    .leaflet-control-attribution {
+      background: rgba(255, 255, 255, 0.9) !important;
+      font-size: 10px !important;
+      padding: 3px 6px !important;
+      border-radius: 6px !important;
+      border: 1px solid #e2e8f0 !important;
+    }
+    
+    .dark .leaflet-control-attribution {
+      background: rgba(30, 41, 59, 0.9) !important;
+      color: #e2e8f0 !important;
+      border-color: #475569 !important;
+    }
+    
+    .dark .leaflet-control-attribution a {
+      color: #60a5fa !important;
+    }
+  </style>
+  <!-- Leaflet CSS for Phase 2 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-slate-900 dark:text-white antialiased selection:bg-primary/30 selection:text-primary transition-colors duration-200">
+
+<div id="root"></div>
+
+</body>
+</html>
+</html>
