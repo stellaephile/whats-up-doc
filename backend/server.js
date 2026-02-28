@@ -75,6 +75,19 @@ const SEVERITY_CONFIG = {
 
 const RADIUS_STEPS = [3, 5, 10, 20];
 
+// ── Shared SELECT columns ─────────────────────────────────────
+const HOSPITAL_SELECT = `
+  id, hospital_name, hospital_category, hospital_care_type,
+  discipline, discipline_clean, ayush,
+  state, district, pincode, address,
+  specialties_array, facilities_array,
+  emergency_available, emergency_num, ambulance_phone, bloodbank_phone,
+  telephone, mobile_number,
+  total_beds, data_quality_norm,
+  ST_X(location::geometry) AS longitude,
+  ST_Y(location::geometry) AS latitude
+`;
+
 // ── Routes ────────────────────────────────────────────────────
 
 app.get('/api/hospitals/stats', async (req, res) => {
@@ -86,7 +99,7 @@ app.get('/api/hospitals/stats', async (req, res) => {
         COUNT(*) FILTER (WHERE emergency_available = TRUE)      AS emergency,
         COUNT(*) FILTER (WHERE ayush = TRUE)                    AS ayush,
         COUNT(*) FILTER (WHERE hospital_category ILIKE '%gov%') AS government,
-        COUNT(*) FILTER (WHERE data_quality_norm >= 0)        AS quality_passed
+        COUNT(*) FILTER (WHERE data_quality_norm >= 0)          AS quality_passed
       FROM hospitals
     `);
     res.json(result.rows[0]);
@@ -98,44 +111,41 @@ app.get('/api/hospitals/stats', async (req, res) => {
 
 app.get('/api/hospitals', async (req, res) => {
   try {
-    const { lat, lng, radius = 10, emergency, specialty } = req.query;
+    const { lat, lng, radius = 10, emergency, specialty, ayush } = req.query;
 
     if (!lat || !lng) {
       return res.status(400).json({ error: 'lat and lng are required' });
     }
 
     const radiusMetres = parseFloat(radius) * 1000;
-
-    let query = `
-      SELECT
-        id, hospital_name, hospital_category, hospital_care_type,
-        discipline, ayush,
-        state, district, pincode, address,
-        specialties_array, facilities_array,
-        emergency_available, emergency_num, ambulance_phone, bloodbank_phone,
-        telephone, mobile_number,
-        total_beds, data_quality_norm,
-        ST_X(location::geometry) AS longitude,
-        ST_Y(location::geometry) AS latitude,
-        (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
-      FROM map_hospitals
-      WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
-    `;
-
     const params = [parseFloat(lat), parseFloat(lng), radiusMetres];
     let paramIndex = 4;
 
+    let whereClause = `ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3) AND location IS NOT NULL`;
+
     if (emergency === 'true') {
-      query += ` AND emergency_available = TRUE`;
+      whereClause += ` AND emergency_available = TRUE`;
+    }
+
+    if (ayush === 'true') {
+      whereClause += ` AND (ayush = TRUE OR 'Ayurveda' = ANY(discipline_clean) OR 'Homeopathy' = ANY(discipline_clean))`;
     }
 
     if (specialty) {
-      query += ` AND specialties_array @> ARRAY[$${paramIndex}]`;
+      whereClause += ` AND specialties_array @> ARRAY[$${paramIndex}]`;
       params.push(specialty);
       paramIndex++;
     }
 
-    query += ` ORDER BY location <-> ST_MakePoint($2, $1)::geography LIMIT 50`;
+    const query = `
+      SELECT
+        ${HOSPITAL_SELECT},
+        (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km
+      FROM hospitals
+      WHERE ${whereClause}
+      ORDER BY location <-> ST_MakePoint($2, $1)::geography
+      LIMIT 50
+    `;
 
     const result = await pool.query(query, params);
     res.json({ hospitals: result.rows, count: result.rows.length, radius: parseFloat(radius) });
@@ -196,20 +206,20 @@ async function queryWithExpansion(lat, lng, config, specialty) {
   const uniqueRadii = [...new Set([
     config.initialRadius,
     ...RADIUS_STEPS.filter(r => r >= config.initialRadius),
-    30, 50  // extra fallback radii
+    30, 50
   ])];
 
   for (const radius of uniqueRadii) {
     const radiusMetres = radius * 1000;
 
-    // --- Pass 1: strict (care type filter) ---
+    // Pass 1: strict (care type filter)
     let hospitals = await runQuery(lat, lng, radiusMetres, config, specialty, true);
     if (hospitals.length > 0) {
       console.log(`✅ Pass1 (strict) found ${hospitals.length} hospitals within ${radius}km`);
       return { hospitals, radiusUsed: radius };
     }
 
-    // --- Pass 2: relaxed (no care type filter, any hospital) ---
+    // Pass 2: relaxed (no care type filter)
     hospitals = await runQuery(lat, lng, radiusMetres, config, specialty, false);
     if (hospitals.length > 0) {
       console.log(`✅ Pass2 (relaxed) found ${hospitals.length} hospitals within ${radius}km`);
@@ -247,15 +257,7 @@ async function runQuery(lat, lng, radiusMetres, config, specialty, strict) {
 
     const query = `
       SELECT
-        id, hospital_name, hospital_category, hospital_care_type,
-        discipline, ayush,
-        state, district, pincode, address,
-        specialties_array, facilities_array,
-        emergency_available, emergency_num, ambulance_phone, bloodbank_phone,
-        telephone, mobile_number,
-        total_beds, data_quality_norm,
-        ST_X(location::geometry) AS longitude,
-        ST_Y(location::geometry) AS latitude,
+        ${HOSPITAL_SELECT},
         (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km
       FROM hospitals
       WHERE ${whereClause}
@@ -282,12 +284,7 @@ app.get('/api/hospitals/search', async (req, res) => {
 
     const result = await pool.query(`
       SELECT
-        id, hospital_name, hospital_category, hospital_care_type,
-        state, district, pincode, address,
-        specialties_array, emergency_available,
-        telephone, mobile_number,
-        ST_X(location::geometry) AS longitude,
-        ST_Y(location::geometry) AS latitude
+        ${HOSPITAL_SELECT}
       FROM hospitals
       WHERE hospital_name ILIKE $1
         ${state ? 'AND state ILIKE $2' : ''}
