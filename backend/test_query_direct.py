@@ -37,7 +37,7 @@ print()
 query = """
 SELECT
     id, hospital_name, hospital_category, hospital_care_type,
-    ROUND((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
+    (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
 FROM hospitals
 WHERE ST_DWithin(location, ST_MakePoint(%s, %s)::geography, %s)
     AND location IS NOT NULL
@@ -66,7 +66,7 @@ else:
     query2 = """
     SELECT
         id, hospital_name, hospital_category, hospital_care_type,
-        ROUND((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
+        (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
     FROM hospitals
     WHERE ST_DWithin(location, ST_MakePoint(%s, %s)::geography, %s)
         AND location IS NOT NULL

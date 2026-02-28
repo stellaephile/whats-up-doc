@@ -125,7 +125,7 @@ def test_connection():
                 total_beds, data_quality_norm,
                 ST_X(location::geometry) AS longitude,
                 ST_Y(location::geometry) AS latitude,
-                ROUND((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
+                (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
             FROM hospitals
             WHERE ST_DWithin(location, ST_MakePoint(%s, %s)::geography, %s)
                 AND hospital_care_type = ANY(%s)
@@ -164,7 +164,7 @@ def test_connection():
                     hospital_name, hospital_care_type, hospital_category,
                     address, district, state,
                     telephone, mobile_number,
-                    ROUND((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
+                    (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
                 FROM hospitals
                 WHERE ST_DWithin(location, ST_MakePoint(%s, %s)::geography, %s)
                     AND hospital_care_type = ANY(%s)
@@ -192,7 +192,7 @@ def test_connection():
                 cur.execute("""
                     SELECT
                         hospital_name, hospital_care_type,
-                        ROUND((ST_Distance(location, ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
+                        (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(%s, %s)::geography) / 1000)::numeric, 2) AS distance_km
                     FROM hospitals
                     WHERE ST_DWithin(location, ST_MakePoint(%s, %s)::geography, %s)
                         AND location IS NOT NULL
