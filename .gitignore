@@ -241,3 +241,10 @@ temp/
 # Keep these files
 !.gitkeep
 !.gitignore
+
+assess-service/__pycache__
+assess-service/.env
+assess-service/assess-service.zip
+
+
+.elasticbeanstalk
