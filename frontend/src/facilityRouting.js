@@ -1,42 +1,73 @@
 // Severity-Based Facility Routing System
 
 /**
- * Routing configuration based on severity levels
+ * All care types that actually exist in India's hospital DB.
+ * Most facilities are typed "Hospital" — the severity difference
+ * is expressed via initialRadius, bed count, and emergency_available,
+ * NOT by trying to find "Dispensary" or "PHC" which rarely appear.
+ */
+const ALL_FACILITY_TYPES = [
+  'Hospital',
+  'Multi Speciality',
+  'Multi-specialty Hospital',
+  'Clinic',
+  'Nursing Home',
+  'Health Centre',
+  'PHC',
+  'CHC',
+  'Dispensary',
+  'Emergency Centre',
+  'Trauma Centre',
+  'Maternity Home',
+  'Eye Hospital',
+  'Dental Clinic',
+  'Ayurvedic Hospital',
+  'Homeopathic Hospital',
+  'Unani Hospital',
+  'Yoga and Naturopathy',
+];
+
+/**
+ * Routing configuration based on severity levels.
+ *
+ * KEY CHANGE: facilityTypes now includes "Hospital" at every level
+ * because that's what the DB actually contains. Differentiation is
+ * done by radius size and (for emergency) emergency_available flag.
  */
 export const routingConfig = {
   mild: {
     level: 'Mild',
-    facilityTypes: ['PHC', 'Dispensary', 'Health Centre'],
-    initialRadius: 3,
-    color: '#10b981', // green
+    facilityTypes: ALL_FACILITY_TYPES, // accept everything — just keep radius small
+    initialRadius: 5,
+    color: '#10b981',
     icon: '🟢'
   },
   moderate: {
     level: 'Moderate',
-    facilityTypes: ['Clinic', 'Nursing Home', 'Hospital'],
-    initialRadius: 5,
-    color: '#f59e0b', // yellow/orange
+    facilityTypes: ALL_FACILITY_TYPES,
+    initialRadius: 8,
+    color: '#f59e0b',
     icon: '🟡'
   },
   high: {
     level: 'High',
-    facilityTypes: ['Hospital', 'Multi-specialty Hospital'],
-    initialRadius: 10,
-    color: '#f97316', // orange
+    facilityTypes: ALL_FACILITY_TYPES,
+    initialRadius: 12,
+    color: '#f97316',
     icon: '🟠'
   },
   emergency: {
     level: 'Emergency',
-    facilityTypes: ['Emergency Centre', 'Hospital', 'Multi-specialty Hospital'],
-    initialRadius: 10,
-    requiresEmergency24x7: true,
-    color: '#ef4444', // red
+    facilityTypes: ALL_FACILITY_TYPES,
+    initialRadius: 12,
+    requiresEmergency24x7: false, // ← don't hard-block on this; most DBs leave it null
+    color: '#ef4444',
     icon: '🔴'
   }
 };
 
 /**
- * Progressive radius expansion steps
+ * Progressive radius expansion steps (km)
  */
 export const radiusExpansionSteps = [3, 5, 10, 20];
 
@@ -45,43 +76,43 @@ export const radiusExpansionSteps = [3, 5, 10, 20];
  */
 export function getExpansionMessage(fromRadius, toRadius) {
   const messages = {
-    '3-5': 'No facilities found nearby. Searching a wider area (5km)...',
-    '5-10': 'Still searching... expanding to 10km radius',
+    '3-5':   'No facilities found nearby. Searching a wider area (5km)...',
+    '5-10':  'Still searching... expanding to 10km radius',
     '10-20': 'Expanding to 20km — showing best available options',
-    'none': 'No facilities found within 20km. Please call 108 for emergency assistance.'
+    'none':  'No facilities found within 20km. Please call 108 for emergency assistance.'
   };
-  
   const key = `${fromRadius}-${toRadius}`;
   return messages[key] || messages['none'];
 }
 
 /**
- * Filter facilities based on severity and radius
+ * Filter facilities based on severity and radius.
+ *
+ * For emergency severity: prefer hospitals with emergency_available=true
+ * but DO NOT exclude others — fall back to all hospitals if none have it.
  */
 export function filterFacilitiesBySeverity(facilities, severityLevel, radius) {
   const config = routingConfig[severityLevel];
-  
+
   if (!config) {
     console.warn(`Unknown severity level: ${severityLevel}`);
     return facilities;
   }
-  
-  return facilities.filter(facility => {
-    // Check facility type
-    const matchesFacilityType = config.facilityTypes.includes(facility.facility_type);
-    
-    // Check emergency requirement
-    if (config.requiresEmergency24x7 && !facility.emergency_24x7) {
-      return false;
-    }
-    
-    // Check radius (if distance is available)
-    if (facility.distance_km && facility.distance_km > radius) {
-      return false;
-    }
-    
-    return matchesFacilityType;
+
+  // Filter by radius only (facility type is now permissive)
+  const withinRadius = facilities.filter(facility => {
+    const dist = parseFloat(facility.distance_km);
+    return isNaN(dist) || dist <= radius;
   });
+
+  // For emergency: try to return emergency-capable hospitals first
+  if (severityLevel === 'emergency') {
+    const emergencyFacilities = withinRadius.filter(f => f.emergency_available);
+    // Only use emergency filter if we actually found some; otherwise show all
+    if (emergencyFacilities.length > 0) return emergencyFacilities;
+  }
+
+  return withinRadius;
 }
 
 /**
@@ -95,26 +126,24 @@ export function progressiveSearch(allFacilities, severityLevel) {
     wasExpanded: false,
     expansionSteps: []
   };
-  
-  // Try each radius step
+
   for (const radius of radiusExpansionSteps) {
     if (radius < config.initialRadius) continue;
-    
+
     const filtered = filterFacilitiesBySeverity(allFacilities, severityLevel, radius);
-    
+
     if (filtered.length > 0) {
       results.facilities = filtered;
       results.radiusUsed = radius;
       results.wasExpanded = radius > config.initialRadius;
       break;
     }
-    
-    // Track expansion attempts
+
     if (radius > config.initialRadius) {
       results.expansionSteps.push(radius);
     }
   }
-  
+
   return results;
 }
 
@@ -122,19 +151,16 @@ export function progressiveSearch(allFacilities, severityLevel) {
  * Calculate distance between two coordinates (Haversine formula)
  */
 export function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Earth's radius in km
+  const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-  
-  const a = 
+
+  const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  const distance = R * c;
-  
-  return distance;
+
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function toRad(degrees) {
@@ -149,8 +175,7 @@ export function enrichAndSortFacilities(facilities, userLat, userLon) {
     .map(facility => ({
       ...facility,
       distance_km: calculateDistance(
-        userLat,
-        userLon,
+        userLat, userLon,
         parseFloat(facility.latitude),
         parseFloat(facility.longitude)
       )
@@ -163,11 +188,12 @@ export function enrichAndSortFacilities(facilities, userLat, userLon) {
  */
 export function getSeverityBadge(severityLevel) {
   const config = routingConfig[severityLevel];
+  if (!config) return { icon: '⚪', label: 'Unknown', color: '#94a3b8', bgColor: '#94a3b820', borderColor: '#94a3b8' };
   return {
-    icon: config.icon,
-    label: config.level,
-    color: config.color,
-    bgColor: `${config.color}20`, // 20% opacity
+    icon:        config.icon,
+    label:       config.level,
+    color:       config.color,
+    bgColor:     `${config.color}20`,
     borderColor: config.color
   };
 }
