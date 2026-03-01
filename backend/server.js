@@ -28,7 +28,7 @@ async function geocodePincode(pincode) {
 
     const response = await locationClient.send(command);
 
-    if (response.Results?.length > 0) {
+    if (response.Results && response.Results.length > 0) {
       const [lng, lat] = response.Results[0].Place.Geometry.Point;
       console.log(`✅ AWS Location: ${pincode} → lat=${lat}, lng=${lng}`);
       return { lat, lng };
@@ -114,7 +114,8 @@ app.get('/api/hospitals', async (req, res) => {
     const { lat, lng, radius = 10, emergency, specialty, ayush } = req.query;
 
     if (!lat || !lng) {
-      return res.status(400).json({ error: 'lat and lng are required' });
+      res.status(400).json({ error: 'lat and lng are required' });
+      return;
     }
 
     const radiusMetres = parseFloat(radius) * 1000;
@@ -167,14 +168,14 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
     const { latitude, longitude, severityLevel, specialties } = req.body;
 
     if (!latitude || !longitude || !severityLevel) {
-      return res.status(400).json({
-        error: 'latitude, longitude, and severityLevel are required'
-      });
+      res.status(400).json({ error: 'latitude, longitude, and severityLevel are required' });
+      return;
     }
 
     const config = SEVERITY_CONFIG[severityLevel];
     if (!config) {
-      return res.status(400).json({ error: 'Invalid severity level' });
+      res.status(400).json({ error: 'Invalid severity level' });
+      return;
     }
 
     const searchResult = await queryWithExpansion(
@@ -212,14 +213,12 @@ async function queryWithExpansion(lat, lng, config, specialty) {
   for (const radius of uniqueRadii) {
     const radiusMetres = radius * 1000;
 
-    // Pass 1: strict (care type filter)
     let hospitals = await runQuery(lat, lng, radiusMetres, config, specialty, true);
     if (hospitals.length > 0) {
       console.log(`✅ Pass1 (strict) found ${hospitals.length} hospitals within ${radius}km`);
       return { hospitals, radiusUsed: radius };
     }
 
-    // Pass 2: relaxed (no care type filter)
     hospitals = await runQuery(lat, lng, radiusMetres, config, specialty, false);
     if (hospitals.length > 0) {
       console.log(`✅ Pass2 (relaxed) found ${hospitals.length} hospitals within ${radius}km`);
@@ -238,7 +237,7 @@ async function runQuery(lat, lng, radiusMetres, config, specialty, strict) {
       ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
       AND location IS NOT NULL
     `;
-    let params = [lat, lng, radiusMetres];
+    const params = [lat, lng, radiusMetres];
     let paramIndex = 4;
 
     if (config.emergencyOnly) {
@@ -267,7 +266,6 @@ async function runQuery(lat, lng, radiusMetres, config, specialty, strict) {
 
     const result = await pool.query(query, params);
     return result.rows;
-
   } catch (err) {
     console.error('❌ runQuery error:', err.message);
     return [];
@@ -277,7 +275,10 @@ async function runQuery(lat, lng, radiusMetres, config, specialty, strict) {
 app.get('/api/hospitals/search', async (req, res) => {
   try {
     const { q, state } = req.query;
-    if (!q) return res.json({ hospitals: [] });
+    if (!q) {
+      res.json({ hospitals: [] });
+      return;
+    }
 
     const searchPattern = `%${q}%`;
     const params = state ? [searchPattern, `%${state}%`] : [searchPattern];
@@ -311,7 +312,8 @@ app.get('/api/pincode/:pincode', async (req, res) => {
   console.log(`📍 Pincode lookup: ${pincode}`);
 
   if (!/^\d{6}$/.test(pincode)) {
-    return res.status(400).json({ error: 'Invalid pincode. Must be 6 digits.' });
+    res.status(400).json({ error: 'Invalid pincode. Must be 6 digits.' });
+    return;
   }
 
   try {
@@ -328,15 +330,16 @@ app.get('/api/pincode/:pincode', async (req, res) => {
         LIMIT 1
       `, [pincode]);
 
-      return res.json({
+      res.json({
         pincode,
         latitude:       geo.lat,
         longitude:      geo.lng,
-        state:          meta.rows[0]?.state          || null,
-        district:       meta.rows[0]?.district       || null,
-        hospital_count: meta.rows[0]?.hospital_count || 0,
+        state:          meta.rows[0] ? meta.rows[0].state          : null,
+        district:       meta.rows[0] ? meta.rows[0].district       : null,
+        hospital_count: meta.rows[0] ? meta.rows[0].hospital_count : 0,
         source:         'aws-location'
       });
+      return;
     }
 
     // Strategy 2: DB exact pincode
@@ -355,7 +358,8 @@ app.get('/api/pincode/:pincode', async (req, res) => {
 
     if (exact.rows.length > 0) {
       console.log(`✅ DB exact: ${exact.rows[0].latitude}, ${exact.rows[0].longitude}`);
-      return res.json({ ...exact.rows[0], source: 'db_exact' });
+      res.json(Object.assign({}, exact.rows[0], { source: 'db_exact' }));
+      return;
     }
 
     // Strategy 3: District centroid
@@ -380,12 +384,13 @@ app.get('/api/pincode/:pincode', async (req, res) => {
 
       if (dist.rows.length > 0) {
         console.log(`✅ District fallback: ${state}, ${district}`);
-        return res.json({ ...dist.rows[0], source: 'db_district' });
+        res.json(Object.assign({}, dist.rows[0], { source: 'db_district' }));
+        return;
       }
     }
 
     console.log(`❌ All strategies failed for ${pincode}`);
-    return res.status(404).json({
+    res.status(404).json({
       error:   'Pincode not found',
       message: 'Could not locate this PIN code. Please check and try again.'
     });
