@@ -357,6 +357,47 @@ app.get('/api/pincode/:pincode', async (req, res) => {
 });
 
 /**
+ * POST /api/symptoms/classify
+ * Proxies to the Python FastAPI backend for symptom classification
+ * Body: { text: "I have high fever and stomach pain" }
+ */
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
+
+app.post('/api/symptoms/classify', async (req, res) => {
+  try {
+    const { text } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+
+    const response = await fetch(`${PYTHON_BACKEND_URL}/api/symptoms/classify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      console.error('Python backend error:', response.status, errBody);
+      return res.status(response.status).json({
+        error: 'Symptom classification failed',
+        message: errBody,
+      });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Error proxying to Python backend:', err.message);
+    res.status(502).json({
+      error: 'Python backend unavailable',
+      message: err.message,
+    });
+  }
+});
+
+/**
  * Health check endpoint
  */
 app.get('/health', async (req, res) => {
