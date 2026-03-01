@@ -241,3 +241,5 @@ temp/
 # Keep these files
 !.gitkeep
 !.gitignore
+
+.elasticbeanstalk

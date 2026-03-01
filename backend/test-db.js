@@ -107,7 +107,7 @@ async function testDatabaseConnection() {
           total_beds, data_quality_norm,
           ST_X(location::geometry) AS longitude,
           ST_Y(location::geometry) AS latitude,
-          ROUND((ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
+          (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
         FROM hospitals
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND hospital_care_type = ANY($4)
@@ -149,7 +149,7 @@ async function testDatabaseConnection() {
             id, hospital_name, hospital_category, hospital_care_type,
             state, district, address,
             telephone, mobile_number,
-            ROUND((ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
+            (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
           FROM hospitals
           WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
             AND hospital_care_type = ANY($4)

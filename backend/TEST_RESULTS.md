@@ -107,7 +107,7 @@ Instead of filtering by care_type, use:
 -- This query returns results (doesn't filter by care_type)
 SELECT
     hospital_name, hospital_category,
-    ROUND((ST_Distance(location, ST_MakePoint(77.425411, 13.165667)::geography) / 1000)::numeric, 2) AS distance_km
+    (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km ST_MakePoint(77.425411, 13.165667)::geography) / 1000)::numeric, 2) AS distance_km
 FROM hospitals
 WHERE ST_DWithin(location, ST_MakePoint(77.425411, 13.165667)::geography, 10000)
     AND location IS NOT NULL
