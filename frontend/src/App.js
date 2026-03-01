@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { sampleHospitals, sampleEmergencyHospitals } from './sampleData';
 
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://whats-up-doc-c12s.onrender.com';
+
 function App() {
   const [currentPhase, setCurrentPhase] = useState(1);
   const [pincode, setPincode] = useState('');
@@ -14,6 +16,8 @@ function App() {
   const markersRef = useRef([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [useSampleData, setUseSampleData] = useState(true); // Toggle for sample data
+  const [classifiedSymptoms, setClassifiedSymptoms] = useState([]);
+  const [aiDetectedEmergency, setAiDetectedEmergency] = useState(false);
   
   // Filter states
   const [showSarkari, setShowSarkari] = useState(true);
@@ -178,11 +182,27 @@ function App() {
 
     setLoading(true);
     setRecommendations([]); // Clear previous results
+    setClassifiedSymptoms([]);
+    setAiDetectedEmergency(false);
+
+    // Step 1: Classify symptoms via AI (best-effort — falls back to manual toggle)
+    let effectiveEmergency = isEmergency;
+    try {
+      const classifyRes = await axios.post(`${API_BASE_URL}/api/symptoms/classify`, {
+        text: condition,
+      });
+      const { classification, emergency } = classifyRes.data;
+      setClassifiedSymptoms(classification);
+      setAiDetectedEmergency(emergency);
+      effectiveEmergency = isEmergency || emergency;
+    } catch (err) {
+      console.warn('Symptom classification unavailable, using manual toggle:', err.message);
+    }
 
     // Use sample data if toggle is enabled
     if (useSampleData) {
       setTimeout(() => {
-        const hospitals = isEmergency ? sampleEmergencyHospitals : sampleHospitals;
+        const hospitals = effectiveEmergency ? sampleEmergencyHospitals : sampleHospitals;
         setRecommendations(hospitals);
         setCurrentPhase(2);
         setLoading(false);
@@ -194,8 +214,9 @@ function App() {
       return;
     }
 
+    // Step 2: Search hospitals
     try {
-      let endpoint = 'https://whats-up-doc-c12s.onrender.com/api/hospitals/recommend';
+      let endpoint = `${API_BASE_URL}/api/hospitals/recommend`;
       const params = new URLSearchParams({
         condition: condition,
         pincode: pincode,
@@ -203,8 +224,8 @@ function App() {
         _t: Date.now()
       });
 
-      if (isEmergency) {
-        endpoint = 'https://whats-up-doc-c12s.onrender.com/api/hospitals/emergency';
+      if (effectiveEmergency) {
+        endpoint = `${API_BASE_URL}/api/hospitals/emergency`;
       }
 
       const response = await axios.get(`${endpoint}?${params}`, {
@@ -214,16 +235,16 @@ function App() {
           'Pragma': 'no-cache'
         }
       });
-      
+
       let hospitals = [];
-      if (isEmergency) {
+      if (effectiveEmergency) {
         hospitals = response.data.nearestHospitals || [];
       } else {
         hospitals = response.data.recommendations || [];
       }
 
       setRecommendations(hospitals);
-      
+
       if (hospitals.length > 0) {
         setCurrentPhase(2);
         // Initialize map after phase transition
@@ -721,12 +742,17 @@ function App() {
           
           {/* Search Keywords Display */}
           <div className="hidden md:flex flex-1 max-w-xl mx-8 relative">
-            <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center flex-wrap gap-2 px-4 py-2 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
               <span className="material-symbols-outlined text-slate-400 text-[16px]">search</span>
               <span className="text-sm text-slate-600 dark:text-slate-400">
                 Searching for: <span className="font-semibold text-slate-900 dark:text-white">"{condition}"</span>
                 {isEmergency && <span className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded">Emergency Mode</span>}
               </span>
+              {classifiedSymptoms.length > 0 && classifiedSymptoms.map((s, i) => (
+                <span key={i} className="px-2 py-0.5 bg-primary/10 text-primary text-xs font-semibold rounded-full">
+                  {s}
+                </span>
+              ))}
             </div>
           </div>
           
@@ -745,6 +771,14 @@ function App() {
           </div>
         </div>
       </header>
+
+      {/* AI-detected emergency banner */}
+      {aiDetectedEmergency && !isEmergency && (
+        <div className="px-4 py-2 bg-red-50 border-b border-red-200 flex items-center gap-2 text-red-700 text-sm font-semibold">
+          <span className="material-symbols-outlined text-[18px]">warning</span>
+          Emergency symptoms detected — prioritizing hospitals with 24/7 emergency services
+        </div>
+      )}
 
       <main className="flex flex-1 overflow-hidden relative w-full">
         {/* Mobile Overlay */}
