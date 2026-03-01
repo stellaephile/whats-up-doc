@@ -3,13 +3,45 @@ require('dotenv').config();
 console.log('DB_HOST:', process.env.DB_HOST);
 console.log('DB_NAME:', process.env.DB_NAME);
 const express = require('express');
-const cors = require('cors');
-const pool = require('./db');
+const cors    = require('cors');
+const pool    = require('./db');
+const { LocationClient, SearchPlaceIndexForTextCommand } = require('@aws-sdk/client-location');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// ── AWS Location Client ───────────────────────────────────────
+const locationClient = new LocationClient({
+  region: process.env.AWS_REGION || 'ap-south-1'
+});
+
+async function geocodePincode(pincode) {
+  try {
+    const command = new SearchPlaceIndexForTextCommand({
+      IndexName:       process.env.AWS_LOCATION_INDEX,
+      Text:            `${pincode}, India`,
+      MaxResults:      1,
+      FilterCountries: ['IND'],
+      Key:             process.env.AWS_LOCATION_API_KEY
+    });
+
+    const response = await locationClient.send(command);
+
+    if (response.Results?.length > 0) {
+      const [lng, lat] = response.Results[0].Place.Geometry.Point;
+      console.log(`✅ AWS Location: ${pincode} → lat=${lat}, lng=${lng}`);
+      return { lat, lng };
+    }
+
+    console.log(`⚠️  AWS Location: no results for ${pincode}`);
+    return null;
+  } catch (err) {
+    console.error(`❌ AWS Location error for ${pincode}:`, err.message);
+    return null;
+  }
+}
+
+// ── Middleware ────────────────────────────────────────────────
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3001',
   credentials: true
@@ -56,17 +88,17 @@ app.get('/api/hospitals/stats', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT
-        COUNT(*)                                              AS total,
-        COUNT(*) FILTER (WHERE location IS NOT NULL)          AS with_coordinates,
-        COUNT(*) FILTER (WHERE emergency_available = TRUE)    AS emergency,
-        COUNT(*) FILTER (WHERE ayush = TRUE)                  AS ayush,
+        COUNT(*)                                                AS total,
+        COUNT(*) FILTER (WHERE location IS NOT NULL)            AS with_coordinates,
+        COUNT(*) FILTER (WHERE emergency_available = TRUE)      AS emergency,
+        COUNT(*) FILTER (WHERE ayush = TRUE)                    AS ayush,
         COUNT(*) FILTER (WHERE hospital_category ILIKE '%gov%') AS government,
         COUNT(*) FILTER (WHERE data_quality_norm >= 0)      AS quality_passed
       FROM hospitals
     `);
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('Error fetching stats:', err.message);
+    console.error('Stats error:', err.message);
     res.status(500).json({ error: 'Database error', message: err.message });
   }
 });
@@ -81,6 +113,7 @@ app.get('/api/hospitals', async (req, res) => {
     if (!lat || !lng) {
       return res.status(400).json({ error: 'lat and lng are required' });
     }
+
 
     const radiusMetres = parseFloat(radius) * 1000;
 
@@ -104,11 +137,11 @@ app.get('/api/hospitals', async (req, res) => {
     let paramIndex = 4;
 
     if (emergency === 'true') {
-      query += ` AND emergency_available = TRUE`;
+      whereClause += ` AND emergency_available = TRUE`;
     }
 
     if (specialty) {
-      query += ` AND specialties_array @> ARRAY[$${paramIndex}]`;
+      whereClause += ` AND specialties_array @> ARRAY[$${paramIndex}]`;
       params.push(specialty);
       paramIndex++;
     }
@@ -117,8 +150,9 @@ app.get('/api/hospitals', async (req, res) => {
 
     const result = await pool.query(query, params);
     res.json({ hospitals: result.rows, count: result.rows.length, radius: parseFloat(radius) });
+    res.json({ hospitals: result.rows, count: result.rows.length, radius: parseFloat(radius) });
   } catch (err) {
-    console.error('Error fetching hospitals:', err.message);
+    console.error('Hospital search error:', err.message);
     res.status(500).json({ error: 'Database error', message: err.message });
   }
 });
@@ -135,19 +169,25 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
     specialties: req.body.specialties
   });
 
+
   try {
     const { latitude, longitude, severityLevel, specialties } = req.body;
 
+
     if (!latitude || !longitude || !severityLevel) {
+      return res.status(400).json({
+        error: 'latitude, longitude, and severityLevel are required'
       return res.status(400).json({
         error: 'latitude, longitude, and severityLevel are required'
       });
     }
 
+
     const config = SEVERITY_CONFIG[severityLevel];
     if (!config) {
       return res.status(400).json({ error: 'Invalid severity level' });
     }
+
 
     const searchResult = await queryWithExpansion(
       parseFloat(latitude),
@@ -167,7 +207,7 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
       config: { level: config.level, initialRadius: config.initialRadius }
     });
   } catch (err) {
-    console.error('❌ Error in severity-based search:', err.message);
+    console.error('❌ Severity-based search error:', err.message);
     res.status(500).json({ error: 'Database error', message: err.message });
   }
 });
@@ -280,23 +320,12 @@ app.get('/api/hospitals/search', async (req, res) => {
 
     const query = `
       SELECT
-        id, hospital_name, hospital_category, hospital_care_type,
-        state, district, pincode, address,
-        specialties_array, emergency_available,
-        telephone, mobile_number,
-        ST_X(location::geometry) AS longitude,
-        ST_Y(location::geometry) AS latitude
+        ${HOSPITAL_SELECT}
       FROM hospitals
       WHERE hospital_name ILIKE $1
-        ${state ? "AND state ILIKE $2" : ''}
+        ${state ? 'AND state ILIKE $2' : ''}
         AND location IS NOT NULL
-      ORDER BY
-        CASE
-          WHEN hospital_name ILIKE $1 THEN 1
-          WHEN hospital_name ILIKE $1 || '%' THEN 2
-          ELSE 3
-        END,
-        hospital_name
+      ORDER BY hospital_name
       LIMIT 20
     `;
 
@@ -305,7 +334,7 @@ app.get('/api/hospitals/search', async (req, res) => {
     const result = await pool.query(query, params);
     res.json({ hospitals: result.rows, count: result.rows.length });
   } catch (err) {
-    console.error('Error searching hospitals:', err.message);
+    console.error('Search error:', err.message);
     res.status(500).json({ error: 'Database error', message: err.message });
   }
 });
@@ -345,8 +374,8 @@ app.get('/api/pincode/:pincode', async (req, res) => {
     console.log(`✅ Pincode ${pincode}: ${result.rows[0].state}, ${result.rows[0].district}`);
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('❌ Error fetching pincode:', err.message);
-    res.status(500).json({ error: 'Database error', message: err.message });
+    console.error('❌ Pincode error:', err.message);
+    res.status(500).json({ error: 'Server error', message: err.message });
   }
 });
 
@@ -386,7 +415,9 @@ app.get('/health', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
     res.json({ status: 'healthy', database: 'connected', timestamp: result.rows[0].now });
+    res.json({ status: 'healthy', database: 'connected', timestamp: result.rows[0].now });
   } catch (err) {
+    res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
     res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
   }
 });
@@ -395,7 +426,7 @@ app.get('/health', async (req, res) => {
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({
-    error: 'Internal server error',
+    error:   'Internal server error',
     message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
   });
 });
@@ -404,6 +435,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📍 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3001'}`);
   console.log(`🗄️  Database: ${process.env.DB_HOST}`);
+  console.log(`🗺️  AWS Location Index: ${process.env.AWS_LOCATION_INDEX}`);
 });
 
 process.on('SIGTERM', () => {

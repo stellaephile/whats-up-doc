@@ -37,16 +37,28 @@ const ALL_FACILITY_TYPES = [
 export const routingConfig = {
   mild: {
     level: 'Mild',
+<<<<<<< HEAD
     facilityTypes: ALL_FACILITY_TYPES, // accept everything — just keep radius small
     initialRadius: 5,
     color: '#10b981',
+=======
+    facilityTypes: ['PHC', 'Dispensary', 'Health Centre','Diagnostic Centre'],
+    initialRadius: 3,
+    color: '#10b981', // green
+>>>>>>> b80673600f59a972b27d0d485ab996f37ba7cde4
     icon: '🟢'
   },
   moderate: {
     level: 'Moderate',
+<<<<<<< HEAD
     facilityTypes: ALL_FACILITY_TYPES,
     initialRadius: 8,
     color: '#f59e0b',
+=======
+    facilityTypes: ['Clinic', 'Nursing Home', 'Hospital','Diagnostic Centre'],
+    initialRadius: 5,
+    color: '#f59e0b', // yellow/orange
+>>>>>>> b80673600f59a972b27d0d485ab996f37ba7cde4
     icon: '🟡'
   },
   high: {
