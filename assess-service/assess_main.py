@@ -14,9 +14,6 @@ import json
 import os
 import re
 
-from dotenv import load_dotenv
-load_dotenv()
-
 app = FastAPI()
 
 # ── CORS ──────────────────────────────────────────────────────
@@ -105,7 +102,7 @@ def parse_json(text: str) -> dict:
 
 # ── Stage 1: Haiku — fast triage ─────────────────────────────
 
-STAGE1_SYSTEM = """You are a medical triage assistant for India. 
+STAGE1_SYSTEM = """You are a medical triage assistant for India.
 Analyze symptoms (may be in English, Hindi, or Hinglish).
 
 Return ONLY valid JSON, no other text:
@@ -121,17 +118,44 @@ Return ONLY valid JSON, no other text:
   "redFlags": ["flag1"]
 }
 
-Rules:
-- isEmergency=true for: chest pain, difficulty breathing, unconscious, stroke, severe bleeding, seizure, heart attack, poisoning, snake bite, labour pain
-- needsClarification=true only if severity is ambiguous and 1-2 questions would change routing
-- clarifyingQuestions: max 2, short, in same language as input
-- redFlags: symptoms that indicate serious illness
-- Always return valid JSON"""
+EMERGENCY RULES (isEmergency=true, skip clarification):
+- chest pain, seena dard, heart attack, dil ka daura
+- difficulty breathing, saans nahi, can not breathe
+- unconscious, behosh, passed out
+- seizure, fits, daura, convulsion
+- stroke, paralysis, face drooping
+- severe bleeding, tez khoon
+- labour pain, prasav dard, water broke
+- poisoning, overdose, snake bite, anaphylaxis
+
+CLARIFICATION RULES (needsClarification=true, ask max 2 questions):
+- ALWAYS ask if age not mentioned and symptom affects children vs adults differently
+- ALWAYS ask if duration not mentioned and it changes severity (fever, pain, cough)
+- ALWAYS ask if symptom is vague and could be mild or serious (headache, stomach pain, chest discomfort, back pain, fatigue, dizziness)
+- Ask questions in SAME language as input (Hindi input -> Hindi questions, English -> English, Hinglish -> Hinglish)
+
+EXAMPLES requiring clarification:
+- "fever" -> "How long have you had fever?" + "How old is the patient?"
+- "headache" -> "How long has this headache lasted?" + "Is it severe or mild?"
+- "stomach pain" -> "Where exactly is the pain?" + "How long have you had it?"
+- "bachhe ko bukhar" -> "Bachhe ki umar kya hai?" + "Kitne din se bukhar hai?"
+- "back pain" -> "Is the pain sudden or gradual?" + "Does it radiate to legs?"
+- "cough" -> "How many days?" + "Any blood or breathing difficulty?"
+
+EXAMPLES not needing clarification:
+- Any emergency keyword above
+- "fever since 3 days with headache" (duration given)
+- "5 year old child with 103 fever" (age and detail given)
+- "tooth pain", "eye problem", "ayurveda" (clear single-system)
+
+Always return valid JSON only, no markdown."""
 
 
 def stage1_haiku(symptoms: str) -> dict:
     text = invoke(HAIKU_MODEL, STAGE1_SYSTEM, f"Symptoms: {symptoms}", max_tokens=500)
+    print("Stage1 result:", text)
     return parse_json(text)
+
 
 
 # ── Stage 2: Sonnet — full assessment ────────────────────────
@@ -152,14 +176,34 @@ Return ONLY valid JSON:
 }
 
 Severity scale:
-1-3: mild   → dispensary, PHC, clinic
-4-5: moderate → clinic, nursing home, hospital OPD
-6-7: high   → hospital, multi-specialty
+1-3: mild      → dispensary, PHC, clinic
+4-5: moderate  → clinic, nursing home, hospital OPD
+6-7: high      → hospital, multi-specialty
 8-10: emergency → 24x7 emergency, call 108
 
+SPECIALTY NAMES — use EXACTLY these strings (they match the hospital database):
+"General Medicine", "Dental", "ENT", "Ophthalmology", "Dermatology",
+"Orthopaedics", "Paediatrics", "Obstetrics and Gynaecology", "Cardiology",
+"Neurology", "Psychiatry", "Gastro-enterology", "Urology", "Nephrology",
+"Endocrinology", "Diabetology", "Physiotherapy", "Oncology", "Pulmonology",
+"Trauma care", "24 hours emergency care", "Cosmetic and plastic surgery",
+"Geriatrics", "Rheumatology", "Haematology"
+
+SEVERITY RULES — do NOT over-triage:
+- Toothache, dental pain, cavity            → severity 3-4, moderate, specialty: ["Dental"]
+- Eye irritation, conjunctivitis            → severity 2-3, mild,     specialty: ["Ophthalmology"]
+- Ear pain, blocked ear, mild ENT           → severity 3,   mild,     specialty: ["ENT"]
+- Skin rash, acne, mild dermatology         → severity 2-3, mild,     specialty: ["Dermatology"]
+- Fever without red flags                   → severity 3-4, moderate, specialty: ["General Medicine", "Paediatrics"]
+- Back/joint pain, not acute                → severity 3-4, moderate, specialty: ["Orthopaedics"]
+- Pregnancy routine checkup                 → severity 3,   mild,     specialty: ["Obstetrics and Gynaecology"]
+- Diabetes management, sugar control       → severity 3-4, moderate, specialty: ["Diabetology", "General Medicine"]
+- Chest pain, breathing difficulty          → severity 8+,  emergency, specialty: ["Cardiology", "24 hours emergency care"]
+- Seizure, stroke, unconscious              → severity 9-10, emergency
+
 Rules:
-- severityLevel MUST match severity score
-- specialties: list 1-3 relevant departments
+- severityLevel MUST match severity score (1-3=mild, 4-5=moderate, 6-7=high, 8-10=emergency)
+- specialties: list 1-3 relevant departments using EXACT names from the list above
 - Always return valid JSON only"""
 
 
@@ -267,6 +311,7 @@ async def assess(req: AssessRequest):
 
         # Non-emergency, no clarification needed → run Sonnet
         stage2 = stage2_sonnet(symptoms, stage1, [], req.age, req.duration)
+        
         return AssessResponse(
             severity=          stage2["severity"],
             severityLevel=     stage2["severityLevel"],

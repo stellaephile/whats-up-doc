@@ -11,6 +11,7 @@
  */
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
+const ASSESS_URL   = process.env.REACT_APP_ASSESS_URL || 'http://localhost:8001';
 
 // ── Instant client-side emergency check ──────────────────────
 // Fires BEFORE the API call so the red banner appears immediately
@@ -64,7 +65,7 @@ class AssessmentService {
     const instant = instantEmergencyCheck(symptomText);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/assess`, {
+      const response = await fetch(`${ASSESS_URL}/api/assess`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

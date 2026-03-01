@@ -86,7 +86,7 @@ function AppWithSymptoms() {
   // ── Shared: fetch hospitals after assessment ──────────────────
   const fetchHospitals = async (assessment) => {
     setLoadingStep('locating');
-
+    
     const pincodeResponse = await axios.get(`${API_BASE_URL}/api/pincode/${pincode}`);
 
     if (!pincodeResponse.data?.latitude) {
@@ -98,7 +98,14 @@ function AppWithSymptoms() {
     const centerLng = parseFloat(pincodeResponse.data.longitude);
 
     setLoadingStep('searching');
-
+    console.log('📡 Calling:', `${API_BASE_URL}/api/hospitals/severity-based`, {
+      pincode,
+      latitude: centerLat,
+      longitude: centerLng,
+      severity: assessment.severity,
+      severityLevel: assessment.severityLevel,
+      specialties: assessment.specialties
+    });
     const response = await axios.post(`${API_BASE_URL}/api/hospitals/severity-based`, {
       pincode,
       latitude:      centerLat,
@@ -108,30 +115,45 @@ function AppWithSymptoms() {
       specialties:   assessment.specialties
     });
 
-    const transformedFacilities = response.data.facilities.map(hospital => ({
-      id:                  hospital.id,
-      name:                hospital.hospital_name,
-      facility_type:       hospital.hospital_care_type,
-      category:            hospital.hospital_category,
-      isGovernment:        hospital.hospital_category?.toLowerCase().includes('gov') ||
-                           hospital.hospital_category?.toLowerCase().includes('public'),
-      isAyush:             hospital.ayush || hospital.discipline?.toLowerCase().includes('ayush'),
-      address:             hospital.address || `${hospital.district}, ${hospital.state}`,
-      phone:               hospital.emergency_num || hospital.telephone || hospital.mobile_number,
-      emergency_num:       hospital.emergency_num,
-      ambulance_phone:     hospital.ambulance_phone,
-      bloodbank_phone:     hospital.bloodbank_phone,
-      telephone:           hospital.telephone,
-      mobile_number:       hospital.mobile_number,
-      latitude:            hospital.latitude,
-      longitude:           hospital.longitude,
-      distance_km:         parseFloat(hospital.distance_km || 0),  // ← fixes toFixed error
-      specialties:         hospital.specialties_array || [],
-      facilities:          hospital.facilities_array  || [],
-      total_beds:          hospital.total_beds,
-      emergency_available: hospital.emergency_available,
-      data_quality:        hospital.data_quality_norm
-    }));
+    console.log('🔍 Raw facilities:', response.data.facilities?.length, response.data.facilities?.[0]);
+
+    const transformedFacilities = (response.data.facilities || [])
+      .filter(h => h.latitude && h.longitude)  
+      .map(hospital => {
+        try {
+          return {
+            id:                  hospital.id,
+            name:                hospital.hospital_name,
+            facility_type:       hospital.hospital_care_type || 'Hospital',
+            category:            hospital.hospital_category  || '',
+            isGovernment:        (hospital.hospital_category || '').toLowerCase().includes('gov') ||
+                                (hospital.hospital_category || '').toLowerCase().includes('public'),
+            isAyush:             hospital.ayush || 
+                                (hospital.discipline || '').toLowerCase().includes('ayush'),
+            address:             hospital.address || `${hospital.district}, ${hospital.state}`,
+            phone:               hospital.emergency_num || hospital.telephone || hospital.mobile_number,
+            emergency_num:       hospital.emergency_num,
+            ambulance_phone:     hospital.ambulance_phone,
+            bloodbank_phone:     hospital.bloodbank_phone,
+            telephone:           hospital.telephone,
+            mobile_number:       hospital.mobile_number,
+            latitude:            hospital.latitude,
+            longitude:           hospital.longitude,
+            distance_km:         parseFloat(hospital.distance_km || 0),
+            specialties:         hospital.specialties_array || [],
+            facilities:          hospital.facilities_array  || [],
+            total_beds:          hospital.total_beds,
+            emergency_available: hospital.emergency_available,
+            data_quality:        hospital.data_quality_norm
+          };
+        } catch(e) {
+          console.error('❌ Failed to transform hospital:', hospital, e);
+          return null;
+        }
+      })
+      .filter(Boolean); // remove any nulls from failed transforms
+
+    console.log('✅ transformedFacilities count:', transformedFacilities.length);
 
     setRecommendations(transformedFacilities);
     setSearchRadius(response.data.radiusUsed);
@@ -572,9 +594,12 @@ function AppWithSymptoms() {
                           setClarifyingAnswers(updated);
                         }}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' && index === clarifyingQuestions.length - 1) {
-                            handleClarifyingSubmit(false);
-                          }
+                            if (e.key === 'Enter') {
+                              e.preventDefault(); // ← ADD THIS — stops form submission
+                              if (index === clarifyingQuestions.length - 1) {
+                                handleClarifyingSubmit(false);
+                                            }
+                                    }
                         }}
                       />
                     </div>
