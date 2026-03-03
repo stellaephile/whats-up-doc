@@ -26,6 +26,7 @@ function AppWithSymptoms() {
   const markersRef = useRef([]);
   const [useSampleData, setUseSampleData] = useState(false);
   const [expansionMessage, setExpansionMessage] = useState(null);
+  const [requiresAyush, setRequiresAyush]         = useState(false);
   
   // Filter states
   const [showSarkari, setShowSarkari] = useState(true);
@@ -94,27 +95,46 @@ function AppWithSymptoms() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waitingForAnswers]);
 
+  // Detect if a hospital is AYUSH
+  const isHospitalAyush = (hospital) =>
+    hospital.ayush === true ||
+    hospital.isAyush === true ||
+    (hospital.category || '').toLowerCase().includes('ayush') ||
+    (hospital.discipline || '').toLowerCase().includes('ayush');
+
   // Filter and prioritize hospitals
   const getFilteredAndPrioritizedHospitals = (hospitals, severityLevel) => {
     let filtered = hospitals.filter(hospital => {
-      const isGovernment = hospital.isGovernment || hospital.category?.toLowerCase().includes('government');
-      const isAyush = hospital.category?.toLowerCase().includes('ayush');
-      const isPrivate = !isGovernment && !isAyush;
-      if (isGovernment && !showSarkari) return false;
-      if (isPrivate && !showPrivate) return false;
-      if (isAyush && !showAyush) return false;
+      const isGov   = hospital.isGovernment || (hospital.category || '').toLowerCase().includes('government');
+      const isAyush = isHospitalAyush(hospital);
+      const isPriv  = !isGov && !isAyush;
+      if (isGov   && !showSarkari) return false;
+      if (isPriv  && !showPrivate) return false;
+      if (isAyush && !showAyush)   return false;
       return true;
     });
 
+    // ── AYUSH search: AYUSH hospitals first, then by distance ──
+    if (requiresAyush) {
+      filtered = filtered.sort((a, b) => {
+        const aIsAyush = isHospitalAyush(a) ? 0 : 1;
+        const bIsAyush = isHospitalAyush(b) ? 0 : 1;
+        if (aIsAyush !== bIsAyush) return aIsAyush - bIsAyush;
+        return (a.distance_km || 0) - (b.distance_km || 0);
+      });
+      return filtered;
+    }
+
+    // ── Mild/moderate: govt first, then distance ──
     if (severityLevel === 'mild' || severityLevel === 'moderate') {
       filtered = filtered.sort((a, b) => {
-        const aIsGov = a.isGovernment || a.category?.toLowerCase().includes('government');
-        const bIsGov = b.isGovernment || b.category?.toLowerCase().includes('government');
-        if (aIsGov && !bIsGov) return -1;
-        if (!aIsGov && bIsGov) return 1;
+        const aGov = a.isGovernment || (a.category || '').toLowerCase().includes('government') ? 0 : 1;
+        const bGov = b.isGovernment || (b.category || '').toLowerCase().includes('government') ? 0 : 1;
+        if (aGov !== bGov) return aGov - bGov;
         return (a.distance_km || 0) - (b.distance_km || 0);
       });
     }
+
     return filtered;
   };
 
@@ -170,6 +190,7 @@ function AppWithSymptoms() {
 
     setRecommendations(transformedFacilities);
     setSearchRadius(response.data.radiusUsed);
+    setRequiresAyush(response.data.requiresAyush || false);
 
     if (response.data.wasExpanded) {
       const config = routingConfig[assessment.severityLevel];
@@ -450,6 +471,7 @@ function AppWithSymptoms() {
     setChatLog([]);
     setChatQIndex(0);
     setChatInput('');
+    setRequiresAyush(false);
   };
 
   const handleSymptomTagClick = (symptom) => setCondition(symptom);
@@ -954,6 +976,16 @@ function AppWithSymptoms() {
               <div className="bg-pink-50 border border-pink-200 rounded-lg p-3 text-sm text-pink-800 flex items-center gap-2">
                 <span className="text-lg">🤰</span>
                 <span className="font-semibold">Showing hospitals with Maternity/Labour wards</span>
+              </div>
+            )}
+
+            {requiresAyush && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800 flex items-center gap-2">
+                <span className="text-lg">🌿</span>
+                <div>
+                  <span className="font-semibold">AYUSH hospitals shown first</span>
+                  <span className="text-green-600 ml-1">— Ayurveda, Homeopathy, Unani & more</span>
+                </div>
               </div>
             )}
             
