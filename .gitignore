@@ -246,5 +246,7 @@ assess-service/__pycache__
 assess-service/.env
 assess-service/assess-service.zip
 
-
-.elasticbeanstalk
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml

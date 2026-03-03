@@ -1,3 +1,4 @@
+// UPDATED: WhatsApp-style clarifying questions chat
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { assessmentService } from './symptomAssessment';
@@ -35,12 +36,20 @@ function AppWithSymptoms() {
   const [showEmergencyWarning, setShowEmergencyWarning] = useState(false);
   const [emergencyKeywordsDetected, setEmergencyKeywordsDetected] = useState([]);
   
-  // ── NEW: Clarifying questions state ──────────────────────────
+  // ── Clarifying questions state ───────────────────────────────
   const [clarifyingQuestions, setClarifyingQuestions] = useState([]);
   const [clarifyingAnswers, setClarifyingAnswers]     = useState([]);
   const [stage1Cache, setStage1Cache]                 = useState(null);
   const [waitingForAnswers, setWaitingForAnswers]     = useState(false);
   const [loadingStep, setLoadingStep]                 = useState('');
+
+  // ── WhatsApp chat state ───────────────────────────────────────
+  const [chatLog, setChatLog]       = useState([]);   // [{role:'bot'|'user', text}]
+  const [chatQIndex, setChatQIndex] = useState(0);    // current question index
+  const [chatInput, setChatInput]   = useState('');
+  const [chatTyping, setChatTyping] = useState(false);
+  const chatBottomRef               = useRef(null);
+  const chatInputRef                = useRef(null);
   // ─────────────────────────────────────────────────────────────
 
   // Database stats
@@ -59,15 +68,37 @@ function AppWithSymptoms() {
     fetchStats();
   }, []);
 
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatLog, chatTyping]);
+
+  // Focus input when it's user's turn
+  useEffect(() => {
+    if (waitingForAnswers && !chatTyping && !loading) {
+      setTimeout(() => chatInputRef.current?.focus(), 100);
+    }
+  }, [chatQIndex, chatTyping, waitingForAnswers, loading]);
+
+  // Kick off chat when clarifying questions arrive
+  useEffect(() => {
+    if (!waitingForAnswers || clarifyingQuestions.length === 0 || chatLog.length > 0) return;
+    const greeting = `I have ${clarifyingQuestions.length} quick question${clarifyingQuestions.length > 1 ? 's' : ''} to find the best hospitals for you.`;
+    setChatLog([{ role: 'bot', text: greeting }]);
+    setChatTyping(true);
+    setTimeout(() => {
+      setChatTyping(false);
+      setChatLog(prev => [...prev, { role: 'bot', text: clarifyingQuestions[0] }]);
+      setChatQIndex(0);
+    }, 900);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingForAnswers]);
+
   // Filter and prioritize hospitals
   const getFilteredAndPrioritizedHospitals = (hospitals, severityLevel) => {
     let filtered = hospitals.filter(hospital => {
       const isGovernment = hospital.isGovernment || hospital.category?.toLowerCase().includes('government');
-      const isAyush =
-    hospital.ayush === true ||
-    hospital.discipline_clean?.some(d =>
-      ['Ayurveda', 'Homeopathy', 'Unani', 'Siddha', 'Naturopathy', 'Yoga'].includes(d)
-    );
+      const isAyush = hospital.category?.toLowerCase().includes('ayush');
       const isPrivate = !isGovernment && !isAyush;
       if (isGovernment && !showSarkari) return false;
       if (isPrivate && !showPrivate) return false;
@@ -90,7 +121,7 @@ function AppWithSymptoms() {
   // ── Shared: fetch hospitals after assessment ──────────────────
   const fetchHospitals = async (assessment) => {
     setLoadingStep('locating');
-    
+
     const pincodeResponse = await axios.get(`${API_BASE_URL}/api/pincode/${pincode}`);
 
     if (!pincodeResponse.data?.latitude) {
@@ -102,14 +133,7 @@ function AppWithSymptoms() {
     const centerLng = parseFloat(pincodeResponse.data.longitude);
 
     setLoadingStep('searching');
-    console.log('📡 Calling:', `${API_BASE_URL}/api/hospitals/severity-based`, {
-      pincode,
-      latitude: centerLat,
-      longitude: centerLng,
-      severity: assessment.severity,
-      severityLevel: assessment.severityLevel,
-      specialties: assessment.specialties
-    });
+
     const response = await axios.post(`${API_BASE_URL}/api/hospitals/severity-based`, {
       pincode,
       latitude:      centerLat,
@@ -119,45 +143,30 @@ function AppWithSymptoms() {
       specialties:   assessment.specialties
     });
 
-    console.log('🔍 Raw facilities:', response.data.facilities?.length, response.data.facilities?.[0]);
-
-    const transformedFacilities = (response.data.facilities || [])
-      .filter(h => h.latitude && h.longitude)  
-      .map(hospital => {
-        try {
-          return {
-            id:                  hospital.id,
-            name:                hospital.hospital_name,
-            facility_type:       hospital.hospital_care_type || 'Hospital',
-            category:            hospital.hospital_category  || '',
-            isGovernment:        (hospital.hospital_category || '').toLowerCase().includes('gov') ||
-                                (hospital.hospital_category || '').toLowerCase().includes('public'),
-            isAyush:             hospital.ayush || 
-                                (hospital.discipline || '').toLowerCase().includes('ayush'),
-            address:             hospital.address || `${hospital.district}, ${hospital.state}`,
-            phone:               hospital.emergency_num || hospital.telephone || hospital.mobile_number,
-            emergency_num:       hospital.emergency_num,
-            ambulance_phone:     hospital.ambulance_phone,
-            bloodbank_phone:     hospital.bloodbank_phone,
-            telephone:           hospital.telephone,
-            mobile_number:       hospital.mobile_number,
-            latitude:            hospital.latitude,
-            longitude:           hospital.longitude,
-            distance_km:         parseFloat(hospital.distance_km || 0),
-            specialties:         hospital.specialties_array || [],
-            facilities:          hospital.facilities_array  || [],
-            total_beds:          hospital.total_beds,
-            emergency_available: hospital.emergency_available,
-            data_quality:        hospital.data_quality_norm
-          };
-        } catch(e) {
-          console.error('❌ Failed to transform hospital:', hospital, e);
-          return null;
-        }
-      })
-      .filter(Boolean); // remove any nulls from failed transforms
-
-    console.log('✅ transformedFacilities count:', transformedFacilities.length);
+    const transformedFacilities = response.data.facilities.map(hospital => ({
+      id:                  hospital.id,
+      name:                hospital.hospital_name,
+      facility_type:       hospital.hospital_care_type,
+      category:            hospital.hospital_category,
+      isGovernment:        hospital.hospital_category?.toLowerCase().includes('gov') ||
+                           hospital.hospital_category?.toLowerCase().includes('public'),
+      isAyush:             hospital.ayush || hospital.discipline?.toLowerCase().includes('ayush'),
+      address:             hospital.address || `${hospital.district}, ${hospital.state}`,
+      phone:               hospital.emergency_num || hospital.telephone || hospital.mobile_number,
+      emergency_num:       hospital.emergency_num,
+      ambulance_phone:     hospital.ambulance_phone,
+      bloodbank_phone:     hospital.bloodbank_phone,
+      telephone:           hospital.telephone,
+      mobile_number:       hospital.mobile_number,
+      latitude:            hospital.latitude,
+      longitude:           hospital.longitude,
+      distance_km:         parseFloat(hospital.distance_km || 0),  // ← fixes toFixed error
+      specialties:         hospital.specialties_array || [],
+      facilities:          hospital.facilities_array  || [],
+      total_beds:          hospital.total_beds,
+      emergency_available: hospital.emergency_available,
+      data_quality:        hospital.data_quality_norm
+    }));
 
     setRecommendations(transformedFacilities);
     setSearchRadius(response.data.radiusUsed);
@@ -198,9 +207,36 @@ function AppWithSymptoms() {
     setRecommendations([]);
     setExpansionMessage(null);
     setWaitingForAnswers(false);
+    setChatLog([]);
+    setChatQIndex(0);
+    setChatInput('');
     setLoadingStep('assessing');
 
     try {
+      // ── Emergency toggle: skip AI entirely ───────────────────
+      if (isEmergency) {
+        const emergencyAssessment = {
+          severity:            'critical',
+          severityLevel:       'emergency',
+          isAutoEmergency:     true,
+          detectedKeywords:    ['Emergency SOS'],
+          needsClarification:  false,
+          clarifyingQuestions: [],
+          specialties:         ['Emergency'],
+          primaryDepartment:   'Emergency',
+          reasoning:           'Emergency mode activated by user.',
+          recommendedAction:   'Proceed to nearest 24x7 emergency facility immediately.',
+          assessmentMode:      'emergency-override',
+          stage1Cache:         null
+        };
+        setAssessmentResult(emergencyAssessment);
+        setShowEmergencyWarning(true);
+        setEmergencyKeywordsDetected(['Emergency SOS']);
+        await fetchHospitals(emergencyAssessment);
+        return;
+      }
+
+      // ── Normal flow: call Bedrock ─────────────────────────────
       // Round 1 — no clarifying answers yet
       const assessment = await assessmentService.assess(
         selectedSymptoms,
@@ -226,6 +262,7 @@ function AppWithSymptoms() {
         setClarifyingAnswers(new Array(assessment.clarifyingQuestions.length).fill(''));
         setStage1Cache(assessment.stage1Cache);
         setWaitingForAnswers(true);
+        setCurrentPhase('chat');
         setLoading(false);
         setLoadingStep('');
         return;
@@ -249,29 +286,46 @@ function AppWithSymptoms() {
     }
   };
 
-  // ── Round 2: submit clarifying answers ───────────────────────
-  const handleClarifyingSubmit = async (skip = false) => {
+  // ── Chat: user sends an answer ───────────────────────────────
+  const handleChatSend = () => {
+    const answer = chatInput.trim();
+    if (!answer) return;
+    setChatLog(prev => [...prev, { role: 'user', text: answer }]);
+    const updated = [...clarifyingAnswers];
+    updated[chatQIndex] = answer;
+    setClarifyingAnswers(updated);
+    setChatInput('');
+    const next = chatQIndex + 1;
+    if (next < clarifyingQuestions.length) {
+      setChatTyping(true);
+      setTimeout(() => {
+        setChatTyping(false);
+        setChatLog(prev => [...prev, { role: 'bot', text: clarifyingQuestions[next] }]);
+        setChatQIndex(next);
+      }, 750);
+    } else {
+      setChatTyping(true);
+      setTimeout(() => {
+        setChatTyping(false);
+        setChatLog(prev => [...prev, { role: 'bot', text: 'Perfect, finding the best hospitals for you now...' }]);
+        setTimeout(() => doSubmitAnswers(updated), 500);
+      }, 750);
+    }
+  };
+
+  const doSubmitAnswers = async (answers) => {
     setLoading(true);
     setWaitingForAnswers(false);
     setLoadingStep('assessing');
-
     try {
-      const answers = skip
-        ? new Array(clarifyingQuestions.length).fill('Not provided')
-        : clarifyingAnswers;
-
       const assessment = await assessmentService.assess(
-        selectedSymptoms,
-        condition,
-        { clarifyingAnswers: answers, stage1Cache }
+        selectedSymptoms, condition, { clarifyingAnswers: answers, stage1Cache }
       );
-
       setAssessmentResult(assessment);
       setClarifyingQuestions([]);
       setStage1Cache(null);
-
+      setChatLog([]);
       await fetchHospitals(assessment);
-
     } catch (err) {
       console.error('Clarifying submit error:', err);
       alert('Something went wrong. Please try again.');
@@ -281,49 +335,37 @@ function AppWithSymptoms() {
     }
   };
 
+  const handleClarifyingSubmit = (skip = false) => {
+    if (skip) { doSubmitAnswers(new Array(clarifyingQuestions.length).fill('Not provided')); return; }
+    handleChatSend();
+  };
+
   const initializeMap = (hospitals, radius, centerLat, centerLng, assessment) => {
     if (!window.L) return;
 
     const mapContainer = document.getElementById('care-map');
     if (!mapContainer) return;
 
-    // Clear existing map
     if (map) {
       map.remove();
       setMap(null);
     }
 
-    // Initialize map WITHOUT initial zoom (we'll set it based on data extent)
     const newMap = window.L.map('care-map', {
       center: [centerLat, centerLng],
-      zoom: 10, // Temporary zoom, will be adjusted
-      zoomControl: false, // We'll add custom controls
+      zoom: radius <= 3 ? 14 : radius <= 5 ? 13 : radius <= 10 ? 12 : 11,
+      zoomControl: false,
       attributionControl: true
     });
     
-    // Add tile layer
     window.L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '© OpenStreetMap © CARTO',
       maxZoom: 19,
       className: 'map-tiles'
     }).addTo(newMap);
 
-    // Add custom zoom controls (top-right position)
-    window.L.control.zoom({
-      position: 'topright'
-    }).addTo(newMap);
-
-    // Add scale control (bottom-left position)
-    window.L.control.scale({
-      position: 'bottomleft',
-      metric: true,
-      imperial: false,
-      maxWidth: 150
-    }).addTo(newMap);
-
-    // Draw radius circle
     const config = routingConfig[assessment.severityLevel];
-    const radiusCircle = window.L.circle([centerLat, centerLng], {
+    window.L.circle([centerLat, centerLng], {
       radius: radius * 1000,
       color: config.color,
       fillColor: config.color,
@@ -332,7 +374,6 @@ function AppWithSymptoms() {
       dashArray: '5, 10'
     }).addTo(newMap);
 
-    // Add hospital markers
     const newMarkers = [];
     hospitals.forEach((hospital) => {
       const lat = parseFloat(hospital.latitude);
@@ -363,7 +404,7 @@ function AppWithSymptoms() {
           <div class="space-y-1 text-xs">
             <div class="flex items-center gap-2">
               <span class="inline-block w-2 h-2 rounded-full" style="background-color: ${config.color}"></span>
-              <span class="font-semibold">${hospital.facility_type || 'Hospital'}</span>
+              <span class="font-semibold">${hospital.facility_type}</span>
             </div>
             <div class="flex items-center gap-2 text-slate-600">
               <span class="material-symbols-outlined text-[14px]">location_on</span>
@@ -390,22 +431,9 @@ function AppWithSymptoms() {
     setMap(newMap);
     markersRef.current = newMarkers;
 
-    // Zoom to data extent (fit all markers + radius circle)
     if (newMarkers.length > 0) {
-      // Create a feature group with all markers AND the radius circle
-      const allFeatures = [...newMarkers, radiusCircle];
-      const group = new window.L.featureGroup(allFeatures);
-      
-      // Fit bounds with padding to show everything nicely
-      newMap.fitBounds(group.getBounds(), {
-        padding: [50, 50], // 50px padding on all sides
-        maxZoom: 15 // Don't zoom in too close
-      });
-    } else {
-      // If no markers, just zoom to the radius circle
-      newMap.fitBounds(radiusCircle.getBounds(), {
-        padding: [50, 50]
-      });
+      const group = new window.L.featureGroup(newMarkers);
+      newMap.fitBounds(group.getBounds().pad(0.2));
     }
   };
 
@@ -419,6 +447,9 @@ function AppWithSymptoms() {
     setWaitingForAnswers(false);
     setClarifyingQuestions([]);
     setStage1Cache(null);
+    setChatLog([]);
+    setChatQIndex(0);
+    setChatInput('');
   };
 
   const handleSymptomTagClick = (symptom) => setCondition(symptom);
@@ -436,6 +467,187 @@ function AppWithSymptoms() {
       setCondition('Emergency situation');
     }
   };
+
+  // ── Phase 'chat': Full-screen clarifying questions ──────────
+  if (currentPhase === 'chat') {
+    const severityColors = {
+      mild: '#10b981', moderate: '#f59e0b', high: '#ef4444', emergency: '#dc2626'
+    };
+    const severityPct = { mild: 25, moderate: 50, high: 75, emergency: 100 };
+    const detectedSeverity = assessmentResult?.severityLevel || 'mild';
+    const svColor = severityColors[detectedSeverity] || '#10b981';
+    const svPct   = severityPct[detectedSeverity]  || 25;
+
+    return (
+      <div className="text-gray-900 min-h-screen flex flex-col" style={{fontFamily:"'Lexend', sans-serif", backgroundColor:'#fff'}}>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700;800&display=swap');
+          @keyframes chatIn {
+            from { opacity:0; transform:translateY(10px); }
+            to   { opacity:1; transform:translateY(0); }
+          }
+          @keyframes dotBounce {
+            0%,60%,100% { transform:translateY(0); opacity:0.4; }
+            30%          { transform:translateY(-5px); opacity:1; }
+          }
+          .chat-in   { animation: chatIn 0.3s ease forwards; }
+          .dot-bounce { animation: dotBounce 1.2s ease infinite; }
+        `}</style>
+
+        {/* Header */}
+        <header className="sticky top-0 z-50 w-full border-b px-6 py-4" style={{background:'rgba(255,255,255,0.96)', backdropFilter:'blur(12px)', borderColor:'#f3f4f6'}}>
+          <div className="max-w-5xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm" style={{background:svColor}}>
+                <span className="material-symbols-outlined text-2xl">health_and_safety</span>
+              </div>
+              <div className="flex flex-col">
+                <h1 className="text-lg font-bold leading-none tracking-tight">What's Up Doc</h1>
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{color:svColor}}>Symptom Assessment</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => { setCurrentPhase(1); setWaitingForAnswers(false); setClarifyingQuestions([]); setChatLog([]); setChatQIndex(0); setChatInput(''); }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold border border-gray-200 hover:border-gray-300 transition-colors text-gray-600"
+              >
+                <span className="material-symbols-outlined text-[16px]">arrow_back</span>
+                Back
+              </button>
+              <a href="tel:108" className="flex items-center gap-2 px-5 py-2 rounded-full text-sm font-bold text-white uppercase tracking-wide transition-all" style={{background:'#ef4444', boxShadow:'0 4px 14px rgba(239,68,68,0.3)'}}>
+                <span className="material-symbols-outlined text-sm">emergency</span>
+                SOS
+              </a>
+            </div>
+          </div>
+        </header>
+
+        {/* Body */}
+        <main className="flex-1 flex relative max-w-5xl mx-auto w-full px-6 py-12">
+
+          {/* Severity sidebar */}
+          <aside className="hidden lg:flex flex-col items-center gap-4 sticky top-32 h-fit pr-12 flex-shrink-0">
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{writingMode:'vertical-rl', transform:'rotate(180deg)', color:svColor, marginBottom:'8px'}}>
+              Severity Tracker
+            </div>
+            <div className="w-1.5 h-64 rounded-full relative overflow-visible" style={{background:'#f3f4f6'}}>
+              <div className="absolute bottom-0 left-0 right-0 rounded-full transition-all duration-700" style={{height:`${svPct}%`, background:svColor}}></div>
+              <div className="absolute -left-1 w-3.5 h-3.5 bg-white border-2 rounded-full shadow-md z-10 transition-all duration-700" style={{bottom:`calc(${svPct}% - 7px)`, borderColor:svColor}}></div>
+            </div>
+            <span className="material-symbols-outlined opacity-30" style={{color:svColor}}>ecg_heart</span>
+          </aside>
+
+          {/* Chat */}
+          <div className="flex-1 flex flex-col items-center max-w-2xl mx-auto w-full">
+            <div className="flex items-center gap-2 px-4 py-2 rounded-full mb-10" style={{background:`${svColor}0d`, border:`1px solid ${svColor}22`}}>
+              <span className="material-symbols-outlined text-[18px]" style={{color:svColor}}>verified_user</span>
+              <span className="text-[11px] font-bold uppercase tracking-widest" style={{color:svColor}}>100% Anonymous &amp; Private</span>
+            </div>
+
+            <div className="w-full space-y-6 mb-52">
+              {chatLog.map((msg, i) => (
+                <div key={i} className="chat-in">
+                  {msg.role === 'bot' ? (
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:`${svColor}1a`}}>
+                        <span className="material-symbols-outlined text-xl" style={{color:svColor}}>smart_toy</span>
+                      </div>
+                      <div className="bg-gray-50 text-gray-900 rounded-2xl rounded-tl-none p-5 max-w-[85%] border border-gray-100 shadow-sm">
+                        <p className="text-sm font-medium leading-relaxed">{msg.text}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex justify-end">
+                      <div className="text-white rounded-2xl rounded-tr-none px-5 py-4 max-w-[85%] text-sm font-medium leading-relaxed" style={{background:svColor, boxShadow:`0 4px 14px ${svColor}44`}}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {chatTyping && (
+                <div className="flex items-start gap-4 chat-in">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:`${svColor}1a`}}>
+                    <span className="material-symbols-outlined text-xl" style={{color:svColor}}>smart_toy</span>
+                  </div>
+                  <div className="bg-gray-50 rounded-2xl rounded-tl-none px-4 py-3.5 flex gap-1.5 items-center border border-gray-100 shadow-sm">
+                    {[0,1,2].map(j => (
+                      <div key={j} className="w-1.5 h-1.5 rounded-full dot-bounce" style={{background:`${svColor}88`, animationDelay:`${j*0.2}s`}}></div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {loading && !chatTyping && (
+                <div className="flex items-start gap-4 chat-in">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{background:`${svColor}1a`}}>
+                    <span className="material-symbols-outlined text-xl" style={{color:svColor}}>smart_toy</span>
+                  </div>
+                  <div className="bg-gray-50 rounded-2xl rounded-tl-none p-4 border border-gray-100 shadow-sm flex items-center gap-3">
+                    <div className="w-4 h-4 rounded-full border-2 animate-spin flex-shrink-0" style={{borderColor:svColor, borderTopColor:'transparent'}}></div>
+                    <span className="text-sm font-medium text-gray-500">Finding the best hospitals for you...</span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={chatBottomRef} />
+            </div>
+          </div>
+        </main>
+
+        {/* Fixed bottom input */}
+        <div className="fixed bottom-0 left-0 right-0 p-6" style={{background:'linear-gradient(to top, white 55%, transparent)'}}>
+          <div className="max-w-2xl mx-auto w-full">
+            {!loading && !chatTyping && chatQIndex < clarifyingQuestions.length && (
+              <div className="bg-white rounded-3xl p-2 flex items-center gap-2 mb-4" style={{boxShadow:'0 10px 40px -10px rgba(0,0,0,0.14)', border:'1px solid #f3f4f6', outline:'1px solid #efefef'}}>
+                <input
+                  ref={chatInputRef}
+                  type="text"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && chatInput.trim()) { e.preventDefault(); handleChatSend(); } }}
+                  placeholder="Type your answer here..."
+                  className="flex-1 bg-transparent border-none focus:ring-0 text-base py-3 pl-6 text-gray-900 placeholder-gray-400 outline-none"
+                  style={{fontFamily:"'Lexend', sans-serif"}}
+                  autoFocus
+                />
+                <button
+                  onClick={handleChatSend}
+                  disabled={!chatInput.trim()}
+                  className="w-12 h-12 rounded-2xl text-white flex items-center justify-center transition-all disabled:opacity-30 group"
+                  style={{background: chatInput.trim() ? svColor : '#d1d5db', boxShadow: chatInput.trim() ? `0 4px 14px ${svColor}55` : 'none'}}
+                >
+                  <span className="material-symbols-outlined group-hover:translate-x-0.5 transition-transform">send</span>
+                </button>
+              </div>
+            )}
+
+            {!loading && (
+              <div className="flex justify-center mb-3">
+                <button
+                  onClick={() => doSubmitAnswers(new Array(clarifyingQuestions.length).fill('Not provided'))}
+                  className="text-xs font-semibold text-gray-400 hover:text-gray-600 transition-colors px-4 py-1.5 rounded-full hover:bg-gray-50"
+                >
+                  Skip all questions →
+                </button>
+              </div>
+            )}
+
+            <div className="rounded-2xl p-4" style={{background:'rgba(254,252,232,0.8)', border:'1px solid rgba(253,224,71,0.4)'}}>
+              <div className="flex gap-3">
+                <span className="material-symbols-outlined text-yellow-600 text-sm flex-shrink-0">info</span>
+                <p className="text-[11px] text-yellow-800 leading-relaxed font-medium">
+                  <strong className="uppercase text-[10px] tracking-wide block mb-0.5">Medical Disclaimer</strong>
+                  This AI assessment is for informational navigation only. Not a clinical diagnosis. If symptoms are severe or life-threatening, call 108 immediately.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ── Phase 1: Landing Page ─────────────────────────────────────
   if (currentPhase === 1) {
@@ -603,71 +815,10 @@ function AppWithSymptoms() {
                 </div>
               </div>
 
-              {/* ── Clarifying Questions Card ──────────────────── */}
-              {waitingForAnswers && clarifyingQuestions.length > 0 && (
-                <div className="w-full bg-blue-50 border-2 border-blue-200 rounded-2xl p-5 space-y-4 text-left">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">🤔</span>
-                    <div>
-                      <h3 className="font-bold text-blue-900 text-base">Just a couple of quick questions</h3>
-                      <p className="text-xs text-blue-600 mt-0.5">Helps us find the most relevant hospitals for you</p>
-                    </div>
-                  </div>
 
-                  {clarifyingQuestions.map((question, index) => (
-                    <div key={index} className="space-y-1.5">
-                      <p className="text-sm font-semibold text-slate-800">{index + 1}. {question}</p>
-                      <input
-                        type="text"
-                        className="w-full h-10 px-3 rounded-lg border border-blue-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 placeholder:text-slate-400"
-                        placeholder="Type your answer..."
-                        value={clarifyingAnswers[index] || ''}
-                        autoFocus={index === 0}
-                        onChange={(e) => {
-                          const updated = [...clarifyingAnswers];
-                          updated[index] = e.target.value;
-                          setClarifyingAnswers(updated);
-                        }}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault(); // ← ADD THIS — stops form submission
-                              if (index === clarifyingQuestions.length - 1) {
-                                handleClarifyingSubmit(false);
-                                            }
-                                    }
-                        }}
-                      />
-                    </div>
-                  ))}
 
-                  <div className="flex gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleClarifyingSubmit(false)}
-                      disabled={loading}
-                      className="flex-1 h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
-                      {loading ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-                          Finding hospitals...
-                        </>
-                      ) : 'Find Hospitals →'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleClarifyingSubmit(true)}
-                      disabled={loading}
-                      className="px-4 h-11 bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
-                    >
-                      Skip
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Loading step messages */}
-              {loading && (
+              {/* Loading step messages (shown outside of chat flow) */}
+              {loading && !waitingForAnswers && (
                 <div className="flex items-center justify-center gap-3 py-2">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary" />
                   <span className="text-slate-600 text-sm font-medium">
