@@ -52,23 +52,24 @@ app.use(express.json());
 // ── Severity Config ───────────────────────────────────────────
 const SEVERITY_CONFIG = {
   mild: {
-    careTypes: ['Dispensary/ Poly Clinic', 'Health Centre'],
-    initialRadius: 3,
+    careTypes: ['Hospital', 'Dispensary/ Poly Clinic', 'Health Centre', 'Clinic'],
+    initialRadius: 5,
     level: 'Mild'
   },
   moderate: {
-    careTypes: ['Hospital', 'Clinic'],
-    initialRadius: 5,
+    careTypes: ['Hospital', 'Clinic', 'Nursing Home', 'Medical College / Institute/Hospital'],
+    initialRadius: 8,
     level: 'Moderate'
   },
   high: {
     careTypes: ['Hospital', 'Medical College / Institute/Hospital'],
-    initialRadius: 10,
+    initialRadius: 12,
     level: 'High'
   },
   emergency: {
     emergencyOnly: true,
-    initialRadius: 10,
+    careTypes: ['Hospital', 'Medical College / Institute/Hospital'],
+    initialRadius: 12,
     level: 'Emergency'
   }
 };
@@ -118,6 +119,7 @@ app.get('/api/hospitals', async (req, res) => {
       return;
     }
 
+
     const radiusMetres = parseFloat(radius) * 1000;
     const params = [parseFloat(lat), parseFloat(lng), radiusMetres];
     let paramIndex = 4;
@@ -150,6 +152,7 @@ app.get('/api/hospitals', async (req, res) => {
 
     const result = await pool.query(query, params);
     res.json({ hospitals: result.rows, count: result.rows.length, radius: parseFloat(radius) });
+    res.json({ hospitals: result.rows, count: result.rows.length, radius: parseFloat(radius) });
   } catch (err) {
     console.error('Hospital search error:', err.message);
     res.status(500).json({ error: 'Database error', message: err.message });
@@ -164,13 +167,19 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
     severity: req.body.severityLevel
   });
 
+
   try {
     const { latitude, longitude, severityLevel, specialties } = req.body;
 
+
     if (!latitude || !longitude || !severityLevel) {
-      res.status(400).json({ error: 'latitude, longitude, and severityLevel are required' });
-      return;
+      return res.status(400).json({
+        error: 'latitude, longitude, and severityLevel are required'
+      return res.status(400).json({
+        error: 'latitude, longitude, and severityLevel are required'
+      });
     }
+
 
     const config = SEVERITY_CONFIG[severityLevel];
     if (!config) {
@@ -178,11 +187,12 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
       return;
     }
 
+
     const searchResult = await queryWithExpansion(
       parseFloat(latitude),
       parseFloat(longitude),
       config,
-      specialties ? specialties[0] : null
+      specialties || []
     );
 
     console.log(`✅ Found ${searchResult.hospitals.length} hospitals within ${searchResult.radiusUsed}km`);
@@ -401,11 +411,45 @@ app.get('/api/pincode/:pincode', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/symptoms/classify — proxy to Python FastAPI
+ */
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
+
+app.post('/api/symptoms/classify', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+
+    const response = await fetch(`${PYTHON_BACKEND_URL}/api/symptoms/classify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      console.error('Python backend error:', response.status, errBody);
+      return res.status(response.status).json({ error: 'Symptom classification failed', message: errBody });
+    }
+
+    res.json(await response.json());
+  } catch (err) {
+    console.error('Error proxying to Python backend:', err.message);
+    res.status(502).json({ error: 'Python backend unavailable', message: err.message });
+  }
+});
+
+/**
+ * Health check
+ */
 app.get('/health', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
     res.json({ status: 'healthy', database: 'connected', timestamp: result.rows[0].now });
+    res.json({ status: 'healthy', database: 'connected', timestamp: result.rows[0].now });
   } catch (err) {
+    res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
     res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
   }
 });
