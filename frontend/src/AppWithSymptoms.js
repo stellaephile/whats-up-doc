@@ -287,26 +287,43 @@ function AppWithSymptoms() {
     const mapContainer = document.getElementById('care-map');
     if (!mapContainer) return;
 
+    // Clear existing map
     if (map) {
       map.remove();
       setMap(null);
     }
 
+    // Initialize map WITHOUT initial zoom (we'll set it based on data extent)
     const newMap = window.L.map('care-map', {
       center: [centerLat, centerLng],
-      zoom: radius <= 3 ? 14 : radius <= 5 ? 13 : radius <= 10 ? 12 : 11,
-      zoomControl: false,
+      zoom: 10, // Temporary zoom, will be adjusted
+      zoomControl: false, // We'll add custom controls
       attributionControl: true
     });
     
+    // Add tile layer
     window.L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '© OpenStreetMap © CARTO',
       maxZoom: 19,
       className: 'map-tiles'
     }).addTo(newMap);
 
+    // Add custom zoom controls (top-right position)
+    window.L.control.zoom({
+      position: 'topright'
+    }).addTo(newMap);
+
+    // Add scale control (bottom-left position)
+    window.L.control.scale({
+      position: 'bottomleft',
+      metric: true,
+      imperial: false,
+      maxWidth: 150
+    }).addTo(newMap);
+
+    // Draw radius circle
     const config = routingConfig[assessment.severityLevel];
-    window.L.circle([centerLat, centerLng], {
+    const radiusCircle = window.L.circle([centerLat, centerLng], {
       radius: radius * 1000,
       color: config.color,
       fillColor: config.color,
@@ -315,6 +332,7 @@ function AppWithSymptoms() {
       dashArray: '5, 10'
     }).addTo(newMap);
 
+    // Add hospital markers
     const newMarkers = [];
     hospitals.forEach((hospital) => {
       const lat = parseFloat(hospital.latitude);
@@ -345,7 +363,7 @@ function AppWithSymptoms() {
           <div class="space-y-1 text-xs">
             <div class="flex items-center gap-2">
               <span class="inline-block w-2 h-2 rounded-full" style="background-color: ${config.color}"></span>
-              <span class="font-semibold">${hospital.facility_type}</span>
+              <span class="font-semibold">${hospital.facility_type || 'Hospital'}</span>
             </div>
             <div class="flex items-center gap-2 text-slate-600">
               <span class="material-symbols-outlined text-[14px]">location_on</span>
@@ -372,9 +390,22 @@ function AppWithSymptoms() {
     setMap(newMap);
     markersRef.current = newMarkers;
 
+    // Zoom to data extent (fit all markers + radius circle)
     if (newMarkers.length > 0) {
-      const group = new window.L.featureGroup(newMarkers);
-      newMap.fitBounds(group.getBounds().pad(0.2));
+      // Create a feature group with all markers AND the radius circle
+      const allFeatures = [...newMarkers, radiusCircle];
+      const group = new window.L.featureGroup(allFeatures);
+      
+      // Fit bounds with padding to show everything nicely
+      newMap.fitBounds(group.getBounds(), {
+        padding: [50, 50], // 50px padding on all sides
+        maxZoom: 15 // Don't zoom in too close
+      });
+    } else {
+      // If no markers, just zoom to the radius circle
+      newMap.fitBounds(radiusCircle.getBounds(), {
+        padding: [50, 50]
+      });
     }
   };
 
