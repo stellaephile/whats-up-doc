@@ -175,8 +175,6 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
     if (!latitude || !longitude || !severityLevel) {
       return res.status(400).json({
         error: 'latitude, longitude, and severityLevel are required'
-      return res.status(400).json({
-        error: 'latitude, longitude, and severityLevel are required'
       });
     }
 
