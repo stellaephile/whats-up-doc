@@ -24,7 +24,6 @@ function AppWithSymptoms() {
   const [map, setMap] = useState(null);
   const [searchRadius, setSearchRadius] = useState(null);
   const markersRef = useRef([]);
-  const [useSampleData, setUseSampleData] = useState(false);
   const [expansionMessage, setExpansionMessage] = useState(null);
   const [requiresAyush, setRequiresAyush]         = useState(false);
   
@@ -685,19 +684,6 @@ function AppWithSymptoms() {
               <h2 className="text-lg font-bold leading-tight tracking-tight hidden sm:block">What's Up Doc</h2>
             </div>
             <div className="flex items-center gap-3">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
-                <span className="text-xs font-medium text-blue-700 dark:text-blue-400">Sample Data</span>
-                <label className="relative inline-flex cursor-pointer items-center">
-                  <input 
-                    className="peer sr-only" 
-                    type="checkbox" 
-                    checked={useSampleData}
-                    onChange={(e) => setUseSampleData(e.target.checked)}
-                  />
-                  <div className="h-5 w-9 rounded-full bg-slate-300 peer-checked:bg-blue-600 transition-colors"></div>
-                  <div className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-all peer-checked:translate-x-full shadow-sm"></div>
-                </label>
-              </div>
               <button 
                 onClick={() => setIsEmergency(true)}
                 className="flex items-center justify-center overflow-hidden rounded-lg h-9 px-4 bg-accent hover:bg-accent-dark text-white text-sm font-bold shadow-sm transition-colors ring-offset-2 focus:ring-2 ring-accent"
