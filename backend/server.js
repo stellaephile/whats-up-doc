@@ -74,7 +74,7 @@ const SEVERITY_CONFIG = {
   }
 };
 
-const RADIUS_STEPS = [3, 5, 10, 20];
+const RADIUS_STEPS = [3, 5, 8, 10, 12, 20, 30, 50];
 
 // ── Shared SELECT columns ─────────────────────────────────────
 const HOSPITAL_SELECT = `
@@ -119,7 +119,6 @@ app.get('/api/hospitals', async (req, res) => {
       return;
     }
 
-
     const radiusMetres = parseFloat(radius) * 1000;
     const params = [parseFloat(lat), parseFloat(lng), radiusMetres];
     let paramIndex = 4;
@@ -152,7 +151,6 @@ app.get('/api/hospitals', async (req, res) => {
 
     const result = await pool.query(query, params);
     res.json({ hospitals: result.rows, count: result.rows.length, radius: parseFloat(radius) });
-    res.json({ hospitals: result.rows, count: result.rows.length, radius: parseFloat(radius) });
   } catch (err) {
     console.error('Hospital search error:', err.message);
     res.status(500).json({ error: 'Database error', message: err.message });
@@ -167,24 +165,19 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
     severity: req.body.severityLevel
   });
 
-
   try {
     const { latitude, longitude, severityLevel, specialties } = req.body;
 
-
     if (!latitude || !longitude || !severityLevel) {
-      return res.status(400).json({
-        error: 'latitude, longitude, and severityLevel are required'
-      });
+      res.status(400).json({ error: 'latitude, longitude, and severityLevel are required' });
+      return;
     }
-
 
     const config = SEVERITY_CONFIG[severityLevel];
     if (!config) {
       res.status(400).json({ error: 'Invalid severity level' });
       return;
     }
-
 
     const searchResult = await queryWithExpansion(
       parseFloat(latitude),
@@ -211,25 +204,37 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
   }
 });
 
-async function queryWithExpansion(lat, lng, config, specialty) {
+// ── Search logic: 3 passes per radius ────────────────────────
+// Pass 1: strict  — exact care type + specialty filter
+// Pass 2: relaxed — care type match OR NULL care type, no specialty
+// Pass 3: any     — no filters, just nearest hospitals
+async function queryWithExpansion(lat, lng, config, specialties) {
   const uniqueRadii = [...new Set([
     config.initialRadius,
-    ...RADIUS_STEPS.filter(r => r >= config.initialRadius),
-    30, 50
+    ...RADIUS_STEPS.filter(r => r >= config.initialRadius)
   ])];
 
   for (const radius of uniqueRadii) {
     const radiusMetres = radius * 1000;
 
-    let hospitals = await runQuery(lat, lng, radiusMetres, config, specialty, true);
+    // Pass 1: strict
+    let hospitals = await runQuery(lat, lng, radiusMetres, config, specialties, 'strict');
     if (hospitals.length > 0) {
       console.log(`✅ Pass1 (strict) found ${hospitals.length} hospitals within ${radius}km`);
       return { hospitals, radiusUsed: radius };
     }
 
-    hospitals = await runQuery(lat, lng, radiusMetres, config, specialty, false);
+    // Pass 2: relaxed — NULL care type allowed, no specialty filter
+    hospitals = await runQuery(lat, lng, radiusMetres, config, specialties, 'relaxed');
     if (hospitals.length > 0) {
       console.log(`✅ Pass2 (relaxed) found ${hospitals.length} hospitals within ${radius}km`);
+      return { hospitals, radiusUsed: radius };
+    }
+
+    // Pass 3: any — nearest hospitals regardless of type
+    hospitals = await runQuery(lat, lng, radiusMetres, config, specialties, 'any');
+    if (hospitals.length > 0) {
+      console.log(`✅ Pass3 (any) found ${hospitals.length} hospitals within ${radius}km`);
       return { hospitals, radiusUsed: radius };
     }
 
@@ -239,7 +244,7 @@ async function queryWithExpansion(lat, lng, config, specialty) {
   return { hospitals: [], radiusUsed: 50 };
 }
 
-async function runQuery(lat, lng, radiusMetres, config, specialty, strict) {
+async function runQuery(lat, lng, radiusMetres, config, specialties, mode) {
   try {
     let whereClause = `
       ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
@@ -248,17 +253,28 @@ async function runQuery(lat, lng, radiusMetres, config, specialty, strict) {
     const params = [lat, lng, radiusMetres];
     let paramIndex = 4;
 
-    if (config.emergencyOnly) {
-      whereClause += ` AND emergency_available = TRUE`;
-    } else if (strict && config.careTypes) {
-      whereClause += ` AND hospital_care_type = ANY($${paramIndex})`;
-      params.push(config.careTypes);
-      paramIndex++;
+    if (mode === 'strict' || mode === 'relaxed') {
+      if (config.emergencyOnly) {
+        whereClause += ` AND emergency_available = TRUE`;
+      } else if (config.careTypes) {
+        if (mode === 'strict') {
+          whereClause += ` AND hospital_care_type = ANY($${paramIndex})`;
+          params.push(config.careTypes);
+          paramIndex++;
+        } else {
+          // relaxed: match care type OR allow NULL care type
+          whereClause += ` AND (hospital_care_type = ANY($${paramIndex}) OR hospital_care_type IS NULL)`;
+          params.push(config.careTypes);
+          paramIndex++;
+        }
+      }
     }
+    // mode === 'any': no care type filter
 
-    if (specialty) {
-      whereClause += ` AND specialties_array @> ARRAY[$${paramIndex}]`;
-      params.push(specialty);
+    // Only apply specialty filter in strict mode
+    if (mode === 'strict' && specialties && specialties.length > 0) {
+      whereClause += ` AND (specialties_array @> ARRAY[$${paramIndex}] OR specialties_array IS NULL)`;
+      params.push(specialties[0]);
       paramIndex++;
     }
 
@@ -275,7 +291,7 @@ async function runQuery(lat, lng, radiusMetres, config, specialty, strict) {
     const result = await pool.query(query, params);
     return result.rows;
   } catch (err) {
-    console.error('❌ runQuery error:', err.message);
+    console.error(`❌ runQuery (${mode}) error:`, err.message);
     return [];
   }
 }
@@ -417,18 +433,22 @@ const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8
 app.post('/api/symptoms/classify', async (req, res) => {
   try {
     const { text } = req.body;
-    if (!text) return res.status(400).json({ error: 'text is required' });
+    if (!text) {
+      res.status(400).json({ error: 'text is required' });
+      return;
+    }
 
     const response = await fetch(`${PYTHON_BACKEND_URL}/api/symptoms/classify`, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body:    JSON.stringify({ text }),
     });
 
     if (!response.ok) {
       const errBody = await response.text();
       console.error('Python backend error:', response.status, errBody);
-      return res.status(response.status).json({ error: 'Symptom classification failed', message: errBody });
+      res.status(response.status).json({ error: 'Symptom classification failed', message: errBody });
+      return;
     }
 
     res.json(await response.json());
@@ -439,19 +459,103 @@ app.post('/api/symptoms/classify', async (req, res) => {
 });
 
 /**
+ * POST /api/assess — proxy to Lambda assess service
+ */
+const LAMBDA_ASSESS_URL = process.env.LAMBDA_ASSESS_URL || process.env.ASSESS_URL || null;
+
+app.post('/api/assess', async (req, res) => {
+  if (!LAMBDA_ASSESS_URL) {
+    console.error('❌ LAMBDA_ASSESS_URL not set');
+    res.status(503).json({
+      error:   'Assessment service not configured',
+      message: 'LAMBDA_ASSESS_URL environment variable is not set on this server.'
+    });
+    return;
+  }
+
+  try {
+    const body = req.body;
+    console.log(`🩺 /api/assess → symptoms="${(body.symptoms || '').slice(0, 60)}" | answers=${(body.clarifyingAnswers || []).length}`);
+
+    const controller = new AbortController();
+    const timeout    = setTimeout(() => controller.abort(), 20000);
+
+    const upstream = await fetch(`${LAMBDA_ASSESS_URL}/api/assess`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+      signal:  controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const data = await upstream.json();
+    console.log(`✅ /api/assess ← needsClarification=${data.needsClarification} | severity=${data.severityLevel}`);
+    res.status(upstream.status).json(data);
+
+  } catch (err) {
+    console.error('❌ /api/assess proxy error:', err.message);
+    res.status(502).json({ error: 'Assessment service unreachable', message: err.message });
+  }
+});
+
+/**
  * Health check
  */
 app.get('/health', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
     res.json({ status: 'healthy', database: 'connected', timestamp: result.rows[0].now });
-    res.json({ status: 'healthy', database: 'connected', timestamp: result.rows[0].now });
   } catch (err) {
-    res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
     res.status(500).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
   }
 });
 
+/**
+ * Debug endpoints
+ */
+app.get('/api/debug/hospitals-sample', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        id, hospital_name, state, district,
+        ST_X(location::geometry) AS longitude,
+        ST_Y(location::geometry) AS latitude,
+        hospital_care_type, specialties_array
+      FROM hospitals
+      WHERE location IS NOT NULL
+      LIMIT 10
+    `);
+    res.json({ count: result.rows.length, hospitals: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/debug/test-geo', async (req, res) => {
+  try {
+    const { lat, lng, radius } = req.body;
+    const radiusMetres = (radius || 50) * 1000;
+
+    const result = await pool.query(`
+      SELECT
+        id, hospital_name, state, district,
+        ST_X(location::geometry) AS longitude,
+        ST_Y(location::geometry) AS latitude,
+        (ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::float AS distance_km
+      FROM hospitals
+      WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
+        AND location IS NOT NULL
+      ORDER BY location <-> ST_MakePoint($2, $1)::geography
+      LIMIT 10
+    `, [lat, lng, radiusMetres]);
+
+    res.json({ query: { lat, lng, radius: radius || 50 }, count: result.rows.length, hospitals: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
+// ── Error handling ────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({

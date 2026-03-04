@@ -261,7 +261,13 @@ function AppWithSymptoms() {
       const assessment = await assessmentService.assess(
         selectedSymptoms,
         condition,
-        { stage1Cache: null, clarifyingAnswers: [] }
+        { 
+          stage1Cache: null, 
+          clarifyingAnswers: [],
+          onRetry: (attempt, maxAttempts) => {
+            setLoadingStep(`assessing (${attempt}/${maxAttempts})`);
+          }
+        }
       );
 
       setAssessmentResult(assessment);
@@ -339,7 +345,15 @@ function AppWithSymptoms() {
     setLoadingStep('assessing');
     try {
       const assessment = await assessmentService.assess(
-        selectedSymptoms, condition, { clarifyingAnswers: answers, stage1Cache }
+        selectedSymptoms, 
+        condition, 
+        { 
+          clarifyingAnswers: answers, 
+          stage1Cache,
+          onRetry: (attempt, maxAttempts) => {
+            setLoadingStep(`assessing (${attempt}/${maxAttempts})`);
+          }
+        }
       );
       setAssessmentResult(assessment);
       setClarifyingQuestions([]);
@@ -830,7 +844,11 @@ function AppWithSymptoms() {
                 <div className="flex items-center justify-center gap-3 py-2">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary" />
                   <span className="text-slate-600 text-sm font-medium">
-                    {loadingStep === 'assessing' && '🩺 AI is analyzing your symptoms...'}
+                    {loadingStep.startsWith('assessing') && (
+                      loadingStep.includes('/')
+                        ? `⏳ Retrying... (${loadingStep.match(/\((.+)\)/)?.[1]})`
+                        : '🩺 AI is analyzing your symptoms...'
+                    )}
                     {loadingStep === 'locating'  && '📍 Locating your area...'}
                     {loadingStep === 'searching' && '🏥 Finding the best hospitals...'}
                     {!loadingStep                && 'Loading...'}
@@ -919,6 +937,17 @@ function AppWithSymptoms() {
           <div className="px-4 py-4 border-b space-y-4">
 
             {/* AI Reasoning Card */}
+            {assessmentResult?.fallbackMode && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-600 flex-shrink-0" style={{fontSize:'16px'}}>wifi_off</span>
+                <p className="text-xs text-amber-800 font-medium">
+                  {assessmentResult.retriesExhausted
+                    ? 'AI service unavailable after retries — results based on symptom keywords only.'
+                    : 'AI assessment unavailable — results based on symptom keywords only.'}
+                </p>
+              </div>
+            )}
+
             {assessmentResult?.reasoning && assessmentResult.assessmentMode !== 'fallback' && (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <div className="flex items-center gap-2 mb-1">

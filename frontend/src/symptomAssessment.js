@@ -11,7 +11,39 @@
  */
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
-const ASSESS_URL   = process.env.REACT_APP_ASSESS_URL || 'http://localhost:8001';
+const ASSESS_URL   = process.env.REACT_APP_ASSESS_URL || process.env.REACT_APP_API_URL || 'http://localhost:5001';
+
+// ── Retry Configuration with Exponential Backoff + Jitter ────
+const RETRY_CONFIG = {
+  emergency: {
+    maxAttempts: 2,
+    baseDelay: 500,      // 500ms base delay
+    jitter: 0.2,         // ±20% random variance
+    timeout: 5000        // 5 second timeout per attempt
+  },
+  nonEmergency: {
+    maxAttempts: 4,
+    baseDelay: 1000,     // 1000ms base delay
+    jitter: 0.2,         // ±20% random variance
+    timeout: 6000        // 6 second timeout per attempt (was 10s — saves 16s worst case)
+  }
+};
+
+// ── Helper: Sleep with delay ──────────────────────────────────
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ── Helper: Calculate delay with exponential backoff + jitter ─
+function calculateRetryDelay(attempt, config) {
+  // Exponential backoff: baseDelay * 2^attempt
+  const exponentialDelay = config.baseDelay * Math.pow(2, attempt);
+  
+  // Add jitter: ±20% random variance
+  const jitterRange = exponentialDelay * config.jitter;
+  const jitter = (Math.random() * 2 - 1) * jitterRange;
+  
+  const delay = exponentialDelay + jitter;
+  return Math.max(0, delay); // Ensure non-negative
+}
 
 // ── Instant client-side emergency check ──────────────────────
 // Fires BEFORE the API call so the red banner appears immediately
@@ -40,7 +72,7 @@ function instantEmergencyCheck(text) {
 
 class AssessmentService {
   /**
-   * Assess symptoms via Bedrock (through backend).
+   * Assess symptoms via Bedrock (through backend) with retry logic.
    *
    * @param {string[]} symptomIds       - Legacy selected symptom IDs (may be empty)
    * @param {string}   condition        - Free text from input box
@@ -49,6 +81,7 @@ class AssessmentService {
    * @param {object}   options.stage1Cache       - Cache from first call (null on first call)
    * @param {string}   options.age               - Patient age
    * @param {string}   options.duration          - How long symptoms present
+   * @param {function} options.onRetry           - Callback for retry progress (attempt, maxAttempts)
    */
   async assess(symptomIds = [], condition = '', options = {}) {
     // Build combined symptom text
@@ -63,74 +96,104 @@ class AssessmentService {
 
     // Instant emergency check — no API wait
     const instant = instantEmergencyCheck(symptomText);
+    
+    // Determine retry config based on emergency status
+    const isEmergency = instant.isEmergency;
+    const retryConfig = isEmergency ? RETRY_CONFIG.emergency : RETRY_CONFIG.nonEmergency;
 
-    try {
-      const response = await fetch(`${ASSESS_URL}/api/assess`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symptoms:          symptomText,
-          clarifyingAnswers: options.clarifyingAnswers || [],
-          stage1Cache:       options.stage1Cache       || null,
-          age:               options.age               || null,
-          duration:          options.duration          || null,
-        })
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.message || `API error ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      // Map backend response → shape AppWithSymptoms.js expects
-      return {
-        // ── Core routing (used by severity-based hospital search) ──
-        severity:      data.severity,
-        severityLevel: data.severityLevel,
-        specialties:   data.specialties || ['General Medicine'],
-
-        // ── Emergency flags (used by warning banner) ──────────────
-        isAutoEmergency:  data.isAutoEmergency || instant.isEmergency,
-        detectedKeywords: data.detectedKeywords?.length > 0
-                            ? data.detectedKeywords
-                            : instant.keywords,
-        requiresTrauma:         data.requiresTrauma         || false,
-        requiresMaternityWard:  data.requiresMaternityWard  || false,
-        requiresNICU:           data.requiresNICU           || false,
-
-        // ── Clarifying questions flow ──────────────────────────────
-        needsClarification:  data.needsClarification  || false,
-        clarifyingQuestions: data.clarifyingQuestions || [],
-        stage1Cache:         data.stage1Cache         || null,
-
-        // ── Display fields ─────────────────────────────────────────
-        primaryDepartment:  data.primaryDepartment,
-        recommendation:     data.recommendedAction,
-        reasoning:          data.reasoning,
-        recommendedAction:  data.recommendedAction,
-        redFlags:           data.redFlags    || [],
-        disclaimer:         data.disclaimer  || 'This is not a medical diagnosis.',
-        assessmentMode:     data.assessmentMode,
-
-        // Legacy field — keeps existing recommendation display working
-        metadata: {
-          method:     data.assessmentMode,
-          department: data.primaryDepartment,
+    // Retry loop with exponential backoff + jitter
+    for (let attempt = 0; attempt < retryConfig.maxAttempts; attempt++) {
+      try {
+        // Notify UI of retry attempt (if callback provided)
+        if (attempt > 0 && options.onRetry) {
+          options.onRetry(attempt + 1, retryConfig.maxAttempts);
         }
-      };
 
-    } catch (err) {
-      console.error('❌ Assessment API failed:', err.message);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), retryConfig.timeout);
 
-      // If API is completely down, use instant check + safe defaults
-      return this._clientFallback(symptomText, instant);
+        const response = await fetch(`${ASSESS_URL}/api/assess`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            symptoms:          symptomText,
+            clarifyingAnswers: options.clarifyingAnswers || [],
+            stage1Cache:       options.stage1Cache       || null,
+            age:               options.age               || null,
+            duration:          options.duration          || null,
+          })
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.message || `API error ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // Success! Map backend response → shape AppWithSymptoms.js expects
+        return {
+          // ── Core routing (used by severity-based hospital search) ──
+          severity:      data.severity,
+          severityLevel: data.severityLevel,
+          specialties:   data.specialties || ['General Medicine'],
+
+          // ── Emergency flags (used by warning banner) ──────────────
+          isAutoEmergency:  data.isAutoEmergency || instant.isEmergency,
+          detectedKeywords: data.detectedKeywords?.length > 0
+                              ? data.detectedKeywords
+                              : instant.keywords,
+          requiresTrauma:         data.requiresTrauma         || false,
+          requiresMaternityWard:  data.requiresMaternityWard  || false,
+          requiresNICU:           data.requiresNICU           || false,
+
+          // ── Clarifying questions flow ──────────────────────────────
+          needsClarification:  data.needsClarification  || false,
+          clarifyingQuestions: data.clarifyingQuestions || [],
+          stage1Cache:         data.stage1Cache         || null,
+
+          // ── Display fields ─────────────────────────────────────────
+          primaryDepartment:  data.primaryDepartment,
+          recommendation:     data.recommendedAction,
+          reasoning:          data.reasoning,
+          recommendedAction:  data.recommendedAction,
+          redFlags:           data.redFlags    || [],
+          disclaimer:         data.disclaimer  || 'This is not a medical diagnosis.',
+          assessmentMode:     data.assessmentMode,
+
+          // Legacy field — keeps existing recommendation display working
+          metadata: {
+            method:     data.assessmentMode,
+            department: data.primaryDepartment,
+          }
+        };
+
+      } catch (err) {
+        console.error(`❌ Assessment attempt ${attempt + 1}/${retryConfig.maxAttempts} failed:`, err.message);
+
+        // If this was the last attempt, use fallback
+        if (attempt === retryConfig.maxAttempts - 1) {
+          console.warn('⚠️ All retry attempts exhausted, using client-side fallback');
+          return this._clientFallback(symptomText, instant, true);
+        }
+
+        // Calculate delay with exponential backoff + jitter
+        const delay = calculateRetryDelay(attempt, retryConfig);
+        console.log(`⏳ Retrying in ${delay.toFixed(0)}ms...`);
+        
+        await sleep(delay);
+      }
     }
+
+    // Should never reach here, but fallback just in case
+    return this._clientFallback(symptomText, instant, true);
   }
 
   // ── Client-side fallback (API unreachable) ──────────────────
-  _clientFallback(symptomText, instant) {
+  _clientFallback(symptomText, instant, retriesExhausted = false) {
     console.warn('⚠️ Using client-side fallback assessment');
 
     if (instant.isEmergency) {
@@ -156,10 +219,14 @@ class AssessmentService {
         recommendedAction:    isObstetric
                                 ? 'Go to nearest hospital with maternity ward immediately.'
                                 : 'Call 108 immediately.',
-        reasoning:            'Emergency symptoms detected (offline assessment).',
+        reasoning:            retriesExhausted 
+                                ? 'AI service unavailable after retries. Emergency symptoms detected (offline assessment).'
+                                : 'Emergency symptoms detected (offline assessment).',
         redFlags:             instant.keywords,
         disclaimer:           'This is not a medical diagnosis.',
         assessmentMode:       'client-fallback',
+        fallbackMode:         true,
+        retriesExhausted:     retriesExhausted,
         metadata:             { method: 'client-fallback' }
       };
     }
@@ -199,12 +266,18 @@ class AssessmentService {
       clarifyingQuestions: [],
       stage1Cache:         null,
       primaryDepartment:   dept,
-      recommendation:      isHigh ? 'Visit a hospital soon.' : 'Visit a nearby clinic.',
+      recommendation:      retriesExhausted
+                             ? 'AI service unavailable. Showing nearby hospitals based on symptoms.'
+                             : 'Showing nearby hospitals based on symptoms.',
       recommendedAction:   isHigh ? 'Visit a hospital soon.' : 'Visit a nearby clinic.',
-      reasoning:           'AI assessment unavailable. Showing nearby hospitals.',
+      reasoning:           retriesExhausted
+                             ? 'AI assessment unavailable after retries. Showing nearby hospitals.'
+                             : 'AI assessment unavailable. Showing nearby hospitals.',
       redFlags:            [],
       disclaimer:          'This is not a medical diagnosis.',
       assessmentMode:      'client-fallback',
+      fallbackMode:        true,
+      retriesExhausted:    retriesExhausted,
       metadata:            { method: 'client-fallback' }
     };
   }
