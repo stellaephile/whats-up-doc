@@ -10,8 +10,8 @@
  *   Round 2: assess(symptoms, { clarifyingAnswers, stage1Cache }) → full result
  */
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
-const ASSESS_URL   = process.env.REACT_APP_ASSESS_URL || process.env.REACT_APP_API_URL || 'http://localhost:5001';
+const API_BASE_URL = process.env.REACT_APP_API_URL;
+const ASSESS_URL   = process.env.REACT_APP_ASSESS_URL;
 
 // ── Retry Configuration with Exponential Backoff + Jitter ────
 const RETRY_CONFIG = {
