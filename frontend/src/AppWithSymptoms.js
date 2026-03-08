@@ -117,6 +117,8 @@ function AppWithSymptoms() {
   const [waitingForAnswers, setWaitingForAnswers]     = useState(false);
   const [loadingStep, setLoadingStep]                 = useState('');
   const [pollyLanguage, setPollyLanguage]             = useState('en');
+  const [pollyPlaying, setPollyPlaying]               = useState(false);
+  const pollyAudioRef                                 = useRef(null);
 
   // ── WhatsApp chat state ───────────────────────────────────────
   const [chatLog, setChatLog]       = useState([]);   // [{role:'bot'|'user', text}]
@@ -280,9 +282,57 @@ function AppWithSymptoms() {
     }
 
     setCurrentPhase(2);
+    // Auto-speak top result once page is stable
+    const lang = assessment.detectedLanguage || pollyLanguage || 'en';
     setTimeout(() => {
       initializeMap(transformedFacilities, response.data.radiusUsed, centerLat, centerLng, assessment);
-    }, 100);
+      if (transformedFacilities.length > 0) {
+        autoSpeak(transformedFacilities[0], lang, assessment.severityLevel);
+      }
+    }, 800);
+  };
+
+  // ── Auto-speak top result via Polly ─────────────────────────
+  const autoSpeak = async (hospital, language, severityLevel) => {
+    if (!hospital) return;
+    const dist  = hospital.distance_km ? parseFloat(hospital.distance_km).toFixed(1) : null;
+    const name  = hospital.name;
+    const phone = hospital.emergency_num || hospital.telephone || hospital.mobile_number || null;
+    const isEm  = severityLevel === 'emergency';
+
+    let text;
+    if (language === 'hi') {
+      const distText  = dist ? `${dist} kilometre door` : 'aapke paas';
+      const phoneText = phone ? ` Phone number hai ${phone}.` : '';
+      text = isEm
+        ? `Achintak sthiti. Sabse paas ka emergency aspatal hai ${name}, ${distText}. Turant jaayen ya ek sau aath dialaein.${phoneText}`
+        : `Aapke liye sabse paas ka aspatal mila. ${name}, ${distText}.${phoneText} Wahan jaane ki salah di jaati hai.`;
+    } else {
+      const distText  = dist ? `${dist} kilometres away` : 'nearby';
+      const phoneText = phone ? ` You can call them on ${phone}.` : '';
+      text = isEm
+        ? `Emergency detected. The nearest emergency hospital is ${name}, ${distText}. Please go immediately or dial one zero eight for an ambulance.${phoneText}`
+        : `We found the best match for you. ${name} is ${distText}.${phoneText} We recommend visiting them for your symptoms.`;
+    }
+
+    try {
+      if (pollyAudioRef.current) { pollyAudioRef.current.pause(); }
+      setPollyPlaying(true);
+      const res  = await fetch(`${API_BASE_URL}/api/polly`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ text, language }),
+      });
+      if (!res.ok) { setPollyPlaying(false); return; }
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      pollyAudioRef.current = new Audio(url);
+      pollyAudioRef.current.onended = () => setPollyPlaying(false);
+      pollyAudioRef.current.play();
+    } catch (e) {
+      console.error('Polly autoplay error:', e);
+      setPollyPlaying(false);
+    }
   };
 
   // ── Round 1: initial search ───────────────────────────────────
@@ -1190,13 +1240,11 @@ function AppWithSymptoms() {
                       <span className="text-xs text-slate-500">
                         📍 {hospital.distance_km ? parseFloat(hospital.distance_km).toFixed(1) : '?'} km away
                       </span>
-                      {index === 0 && (
-                        <SpeakButton
-                          hospital={hospital}
-                          language={pollyLanguage}
-                          severityLevel={assessmentResult.severityLevel}
-                          apiBase={API_BASE_URL}
-                        />
+                      {index === 0 && pollyPlaying && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 animate-pulse">
+                          <span className="material-symbols-outlined text-[13px]">volume_up</span>
+                          Speaking...
+                        </span>
                       )}
                     </div>
                     
