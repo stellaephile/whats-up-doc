@@ -3,8 +3,15 @@ require('dotenv').config();
 console.log('DB_HOST:', process.env.DB_HOST);  // should print your RDS endpoint
 console.log('DB_NAME:', process.env.DB_NAME);  // should print postgres
 const express = require('express');
-const cors = require('cors');
-const pool = require('./db');
+const cors    = require('cors');
+const pool    = require('./db');
+const { PollyClient, SynthesizeSpeechCommand }           = require('@aws-sdk/client-polly');
+const { LocationClient, SearchPlaceIndexForTextCommand } = require('@aws-sdk/client-location');
+
+// ── AWS clients ───────────────────────────────────────────────
+const pollyClient    = new PollyClient({ region: process.env.AWS_REGION || 'ap-south-1' });
+const locationClient = new LocationClient({ region: process.env.AWS_REGION || 'ap-south-1' });
+const PLACE_INDEX    = process.env.AWS_LOCATION_INDEX || 'whatsup-doc-index';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -382,37 +389,194 @@ app.get('/api/hospitals/search', async (req, res) => {
  */
 app.get('/api/pincode/:pincode', async (req, res) => {
   const { pincode } = req.params;
-  console.log(`📍 Pincode lookup request: ${pincode}`);
-  
+  console.log(`📍 Pincode lookup: ${pincode}`);
+
+  // ── Strategy 1: India Post API (true pincode centroid) ───────
+  try {
+    const ipResp = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
+    const ipData = await ipResp.json();
+    const po     = ipData?.[0]?.PostOffice?.[0];
+    if (po && ipData[0].Status === 'Success') {
+      // Pick Head Post Office for most accurate centroid, fall back to first
+      const allPOs  = ipData[0].PostOffice || [];
+      const headPO  = allPOs.find(p => p.BranchType === 'Head Post Office') || allPOs[0];
+      const po      = headPO;
+      const district = po.District;
+      const state    = po.State;
+      const poName   = po.Name?.trim() || '';
+      console.log(`✅ India Post: ${pincode} → ${poName}, ${district}, ${state}`);
+
+      // Geocode using Head PO name + district for maximum precision
+      try {
+        const searchText = poName
+          ? `${poName} ${pincode} ${district} ${state} India`
+          : `${pincode} ${district} ${state} India`;
+        const cmd  = new SearchPlaceIndexForTextCommand({
+          IndexName:       PLACE_INDEX,
+          Text:            searchText,
+          MaxResults:      1,
+          FilterCountries: ['IND'],
+        });
+        const resp  = await locationClient.send(cmd);
+        const place = resp.Results?.[0]?.Place;
+        if (place?.Geometry?.Point) {
+          const [lng, lat] = place.Geometry.Point;
+          if (lat >= 6 && lat <= 37 && lng >= 68 && lng <= 98) {
+            let hospital_count = 0;
+            try {
+              const cnt = await pool.query('SELECT COUNT(*) AS c FROM hospitals WHERE pincode = $1', [pincode]);
+              hospital_count = parseInt(cnt.rows[0]?.c || 0);
+            } catch (_) {}
+            console.log(`✅ India Post + Location: ${pincode} → ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+            return res.json({ pincode, state, district, latitude: lat, longitude: lng, hospital_count, source: 'indiapost-location' });
+          }
+        }
+      } catch (_) {}
+
+      // India Post resolved name but AWS Location failed — use district fallback from DB
+      const dbDistrict = await pool.query(`
+        SELECT
+          $1 AS pincode, state, district,
+          AVG(ST_Y(location::geometry)) AS latitude,
+          AVG(ST_X(location::geometry)) AS longitude,
+          COUNT(*) AS hospital_count
+        FROM hospitals
+        WHERE LOWER(district) = LOWER($2)
+          AND location IS NOT NULL
+          AND ST_Y(location::geometry) BETWEEN 6 AND 37
+          AND ST_X(location::geometry) BETWEEN 68 AND 98
+        GROUP BY state, district
+        LIMIT 1
+      `, [pincode, district]);
+      if (dbDistrict.rows.length > 0) {
+        console.log(`✅ India Post + DB district: ${pincode} → ${district}`);
+        return res.json({ ...dbDistrict.rows[0], source: 'indiapost-db-district' });
+      }
+    }
+  } catch (ipErr) {
+    console.warn(`⚠️  India Post API failed for ${pincode}: ${ipErr.message}`);
+  }
+
+  // ── Strategy 2: AWS Location Service direct pincode search ───
+  try {
+    const cmd  = new SearchPlaceIndexForTextCommand({
+      IndexName:       PLACE_INDEX,
+      Text:            `${pincode}, India`,
+      MaxResults:      1,
+      FilterCountries: ['IND'],
+    });
+    const resp  = await locationClient.send(cmd);
+    const place = resp.Results?.[0]?.Place;
+    if (place?.Geometry?.Point) {
+      const [lng, lat] = place.Geometry.Point;
+      // Sanity check — must be within India bounding box
+      if (lat >= 6 && lat <= 37 && lng >= 68 && lng <= 98) {
+        const label    = place.Label || '';
+        const parts    = label.split(',').map(s => s.trim());
+        const state    = parts[parts.length - 2] || '';
+        const district = parts[parts.length - 3] || '';
+        console.log(`✅ AWS Location: ${pincode} → ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+        let hospital_count = 0;
+        try {
+          const cnt = await pool.query('SELECT COUNT(*) AS c FROM hospitals WHERE pincode = $1', [pincode]);
+          hospital_count = parseInt(cnt.rows[0]?.c || 0);
+        } catch (_) {}
+        return res.json({ pincode, state, district, latitude: lat, longitude: lng, hospital_count, source: 'aws-location' });
+      }
+    }
+  } catch (locErr) {
+    console.warn(`⚠️  AWS Location failed for ${pincode}: ${locErr.message}`);
+  }
+
+  // ── Strategy 2: DB centroid — validated within India bounds ──
   try {
     const result = await pool.query(`
       SELECT
-        pincode,
-        state,
-        district,
+        pincode, state, district,
         AVG(ST_Y(location::geometry)) AS latitude,
         AVG(ST_X(location::geometry)) AS longitude,
         COUNT(*) AS hospital_count
       FROM hospitals
       WHERE pincode = $1
         AND location IS NOT NULL
+        AND ST_Y(location::geometry) BETWEEN 6  AND 37
+        AND ST_X(location::geometry) BETWEEN 68 AND 98
       GROUP BY pincode, state, district
       LIMIT 1
     `, [pincode]);
-    
-    if (result.rows.length === 0) {
-      console.log(`❌ Pincode ${pincode} not found`);
-      return res.status(404).json({ 
-        error: 'Pincode not found',
-        message: 'No hospitals found for this pincode in our database'
-      });
+    if (result.rows.length > 0) {
+      const row = result.rows[0];
+      console.log(`✅ DB centroid: ${pincode} → ${parseFloat(row.latitude).toFixed(4)}, ${parseFloat(row.longitude).toFixed(4)}`);
+      return res.json({ ...row, source: 'db-centroid' });
     }
-    
-    console.log(`✅ Pincode ${pincode} found: ${result.rows[0].state}, ${result.rows[0].district}`);
-    res.json(result.rows[0]);
+  } catch (dbErr) {
+    console.error(`❌ DB centroid failed: ${dbErr.message}`);
+  }
+
+  // ── Strategy 3: District centroid (first 3 digits of pincode) 
+  try {
+    const result = await pool.query(`
+      SELECT
+        $1 AS pincode, state, district,
+        AVG(ST_Y(location::geometry)) AS latitude,
+        AVG(ST_X(location::geometry)) AS longitude,
+        COUNT(*) AS hospital_count
+      FROM hospitals
+      WHERE pincode LIKE $2
+        AND location IS NOT NULL
+        AND ST_Y(location::geometry) BETWEEN 6  AND 37
+        AND ST_X(location::geometry) BETWEEN 68 AND 98
+      GROUP BY state, district
+      LIMIT 1
+    `, [pincode, pincode.substring(0, 3) + '%']);
+    if (result.rows.length > 0) {
+      console.log(`✅ District fallback: ${pincode}`);
+      return res.json({ ...result.rows[0], source: 'district-fallback' });
+    }
+  } catch (_) {}
+
+  console.log(`❌ Pincode ${pincode} not resolved`);
+  return res.status(404).json({ error: 'Pincode not found', message: 'Could not locate this pincode. Please try a nearby pincode.' });
+});
+
+// ── Amazon Polly TTS ─────────────────────────────────────────
+app.post('/api/polly', async (req, res) => {
+  const { text, language = 'en' } = req.body;
+  if (!text) return res.status(400).json({ error: 'text required' });
+  try {
+    const isHindi = language === 'hi';
+    const cmd = new SynthesizeSpeechCommand({
+      Text:         text,
+      VoiceId:      'Kajal',
+      Engine:       'neural',
+      OutputFormat: 'mp3',
+      LanguageCode: isHindi ? 'hi-IN' : 'en-IN',
+    });
+    const result = await pollyClient.send(cmd);
+    res.setHeader('Content-Type',  'audio/mpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    result.AudioStream.pipe(res);
   } catch (err) {
-    console.error('❌ Error fetching pincode:', err.message);
-    res.status(500).json({ error: 'Database error', message: err.message });
+    console.error('Polly error:', err.message);
+    res.status(500).json({ error: 'TTS failed', message: err.message });
+  }
+});
+
+// ── Lambda assess proxy ───────────────────────────────────────
+app.post('/api/assess', async (req, res) => {
+  const lambdaUrl = process.env.LAMBDA_ASSESS_URL;
+  if (!lambdaUrl) return res.status(503).json({ error: 'Assessment service not configured' });
+  try {
+    const upstream = await fetch(lambdaUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(req.body),
+    });
+    const data = await upstream.json();
+    res.status(upstream.status).json(data);
+  } catch (err) {
+    console.error('Assess proxy error:', err.message);
+    res.status(502).json({ error: 'Assessment service unavailable', message: err.message });
   }
 });
 
