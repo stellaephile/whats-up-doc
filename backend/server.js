@@ -275,8 +275,8 @@ async function queryWithExpansion(lat, lng, config, specialty, state, district) 
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND emergency_available = TRUE
           AND location IS NOT NULL
-          AND data_quality_norm >= 0.3
-          \${GEO_FENCE}
+          AND data_quality_norm >= 0.4
+          ${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
@@ -289,10 +289,10 @@ async function queryWithExpansion(lat, lng, config, specialty, state, district) 
         FROM hospitals
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND location IS NOT NULL
-          AND data_quality_norm >= 0.3
+          AND data_quality_norm >= 0.4
           AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
           AND specialties_array @> ARRAY[$5]
-          \${GEO_FENCE}
+          ${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
@@ -305,9 +305,9 @@ async function queryWithExpansion(lat, lng, config, specialty, state, district) 
         FROM hospitals
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND location IS NOT NULL
-          AND data_quality_norm >= 0.3
+          AND data_quality_norm >= 0.4
           AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
-          \${GEO_FENCE}
+          ${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
