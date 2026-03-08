@@ -5,13 +5,6 @@ console.log('DB_NAME:', process.env.DB_NAME);  // should print postgres
 const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
-const { PollyClient, SynthesizeSpeechCommand } = require('@aws-sdk/client-polly');
-
-// ── AWS Polly Client ──────────────────────────────────────────
-const pollyClient = new PollyClient({ region: process.env.AWS_REGION || 'ap-south-1' });
-
-// ── Lambda assess-service URL ─────────────────────────────────
-const LAMBDA_ASSESS_URL = process.env.LAMBDA_ASSESS_URL || process.env.ASSESS_URL || null;
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -49,6 +42,40 @@ const SEVERITY_CONFIG = {
 
 // Progressive radius expansion
 const RADIUS_STEPS = [3, 5, 10, 20];
+
+// ── Specialty synonym map ─────────────────────────────────────
+// AI sometimes returns names that don't match DB values exactly.
+// Map AI output → actual specialties_array values in the DB.
+const SPECIALTY_SYNONYMS = {
+  'Internal Medicine':    'General Medicine',
+  'General Practice':     'General Medicine',
+  'Family Medicine':      'General Medicine',
+  'GP':                   'General Medicine',
+  'Infectious Disease':   'General Medicine',
+  'Infectious Diseases':  'General Medicine',
+  'Tropical Medicine':    'General Medicine',
+  'Pulmonology':          'Respiratory Medicine',
+  'Respirology':          'Respiratory Medicine',
+  'Chest Medicine':       'Respiratory Medicine',
+  'Cardiology':           'Cardiology',
+  'Orthopaedics':         'Orthopedics',
+  'Orthopaedic Surgery':  'Orthopedics',
+  'OB-GYN':               'Obstetrics & Gynaecology',
+  'Obstetrics':           'Obstetrics & Gynaecology',
+  'Gynecology':           'Obstetrics & Gynaecology',
+  'Gynaecology':          'Obstetrics & Gynaecology',
+  'Paediatrics':          'Pediatrics',
+  'Child Medicine':       'Pediatrics',
+  'ENT':                  'ENT (Ear Nose Throat)',
+  'Ear Nose Throat':      'ENT (Ear Nose Throat)',
+  'Ophthalmology':        'Eye',
+  'Eye Care':             'Eye',
+};
+
+function normalizeSpecialty(specialty) {
+  if (!specialty) return null;
+  return SPECIALTY_SYNONYMS[specialty] || specialty;
+}
 
 /**
  * GET /api/hospitals/stats
@@ -165,11 +192,19 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
     }
     
     // Progressive search with radius expansion
+    // Normalize specialty name — AI may return 'Internal Medicine'
+    // but DB uses 'General Medicine'
+    const rawSpecialty  = specialties?.[0] || null;
+    const normSpecialty = normalizeSpecialty(rawSpecialty);
+    if (rawSpecialty && rawSpecialty !== normSpecialty) {
+      console.log(`🔄 Specialty normalized: "${rawSpecialty}" → "${normSpecialty}"`);
+    }
+
     const searchResult = await queryWithExpansion(
       parseFloat(latitude),
       parseFloat(longitude),
       config,
-      specialties ? specialties[0] : null
+      normSpecialty
     );
     
     console.log(`✅ Found ${searchResult.hospitals.length} hospitals within ${searchResult.radiusUsed}km`);
@@ -194,75 +229,93 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
  * Helper function: Progressive search with radius expansion
  */
 async function queryWithExpansion(lat, lng, config, specialty) {
-  // Get unique radius steps starting from initial radius
-  const radii = RADIUS_STEPS.filter(r => r >= config.initialRadius);
+  const radii      = RADIUS_STEPS.filter(r => r >= config.initialRadius);
   const uniqueRadii = [...new Set(radii)];
-  
-  for (const radius of uniqueRadii) {
-    const radiusMetres = radius * 1000;
+
+  const BASE_SELECT = `
+    id, hospital_name, hospital_category, hospital_care_type,
+    discipline, ayush,
+    state, district, pincode, address,
+    specialties_array, facilities_array,
+    emergency_available, emergency_num, ambulance_phone, bloodbank_phone,
+    telephone, mobile_number,
+    total_beds, data_quality_norm,
+    ST_X(location::geometry) AS longitude,
+    ST_Y(location::geometry) AS latitude,
+    ROUND((ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
+  `;
+
+  const runPass = async (radiusMetres, useSpecialty) => {
     let query, params;
-    
+
     if (config.emergencyOnly) {
-      // Emergency-only query
+      // Emergency: strict emergency_available only, no specialty filter
       query = `
-        SELECT
-          id, hospital_name, hospital_category, hospital_care_type,
-          discipline, ayush,
-          state, district, pincode, address,
-          specialties_array, facilities_array,
-          emergency_available, emergency_num, ambulance_phone, bloodbank_phone,
-          telephone, mobile_number,
-          total_beds, data_quality_norm,
-          ST_X(location::geometry) AS longitude,
-          ST_Y(location::geometry) AS latitude,
-          ROUND((ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
+        SELECT ${BASE_SELECT}
         FROM hospitals
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND emergency_available = TRUE
           AND location IS NOT NULL
           AND data_quality_norm >= 0.3
-        ${specialty ? 'AND specialties_array @> ARRAY[$4]' : ''}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
       params = [lat, lng, radiusMetres];
-      if (specialty) params.push(specialty);
-    } else {
-      // Regular query - include hospitals with NULL care_type OR matching care_type
-      // This handles the data quality issue where most hospitals have NULL care_type
+
+    } else if (useSpecialty && specialty) {
+      // Pass 1: care type match + specialty filter
       query = `
-        SELECT
-          id, hospital_name, hospital_category, hospital_care_type,
-          discipline, ayush,
-          state, district, pincode, address,
-          specialties_array, facilities_array,
-          emergency_available, emergency_num, ambulance_phone, bloodbank_phone,
-          telephone, mobile_number,
-          total_beds, data_quality_norm,
-          ST_X(location::geometry) AS longitude,
-          ST_Y(location::geometry) AS latitude,
-          ROUND((ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
+        SELECT ${BASE_SELECT}
         FROM hospitals
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND location IS NOT NULL
           AND data_quality_norm >= 0.3
           AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
-        ${specialty ? 'AND specialties_array @> ARRAY[$5]' : ''}
+          AND specialties_array @> ARRAY[$5]
+        ORDER BY location <-> ST_MakePoint($2, $1)::geography
+        LIMIT 20
+      `;
+      params = [lat, lng, radiusMetres, config.careTypes, specialty];
+
+    } else {
+      // Pass 2+: drop specialty — care type match only (or any if relaxed)
+      query = `
+        SELECT ${BASE_SELECT}
+        FROM hospitals
+        WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
+          AND location IS NOT NULL
+          AND data_quality_norm >= 0.3
+          AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
       params = [lat, lng, radiusMetres, config.careTypes];
-      if (specialty) params.push(specialty);
     }
-    
+
     const result = await pool.query(query, params);
-    
-    if (result.rows.length > 0) {
-      return {
-        hospitals: result.rows,
-        radiusUsed: radius
-      };
+    return result.rows;
+  };
+
+  for (const radius of uniqueRadii) {
+    const rm = radius * 1000;
+
+    // Pass 1: with specialty filter
+    if (specialty) {
+      const rows = await runPass(rm, true);
+      if (rows.length > 0) {
+        console.log(`✅ Pass1 (specialty="${specialty}") found ${rows.length} hospitals within ${radius}km`);
+        return { hospitals: rows, radiusUsed: radius };
+      }
     }
+
+    // Pass 2: drop specialty, keep care type
+    const rows2 = await runPass(rm, false);
+    if (rows2.length > 0) {
+      console.log(`✅ Pass2 (no specialty) found ${rows2.length} hospitals within ${radius}km`);
+      return { hospitals: rows2, radiusUsed: radius };
+    }
+
+    console.log(`⚠️  No hospitals within ${radius}km, expanding...`);
   }
   
   // No hospitals found even at 20km
@@ -380,59 +433,6 @@ app.get('/health', async (req, res) => {
       database: 'disconnected',
       error: err.message
     });
-  }
-});
-
-// ── POST /api/polly — Amazon Polly text-to-speech ────────────
-app.post('/api/polly', async (req, res) => {
-  const { text, language = 'en' } = req.body;
-  if (!text?.trim()) return res.status(400).json({ error: 'text required' });
-  try {
-    console.log(`🔊 Polly: lang=${language} chars=${text.length}`);
-    const command = new SynthesizeSpeechCommand({
-      Text:         text,
-      VoiceId:      'Kajal',
-      Engine:       'neural',
-      OutputFormat: 'mp3',
-      LanguageCode: language === 'hi' ? 'hi-IN' : 'en-IN',
-    });
-    const pollyRes = await pollyClient.send(command);
-    res.set('Content-Type', 'audio/mpeg');
-    res.set('Cache-Control', 'public, max-age=3600');
-    pollyRes.AudioStream.pipe(res);
-  } catch (err) {
-    console.error('❌ Polly error:', err.message);
-    res.status(500).json({ error: 'TTS failed', message: err.message });
-  }
-});
-
-// ── POST /api/assess — proxy to Lambda assess-service ────────
-app.post('/api/assess', async (req, res) => {
-  if (!LAMBDA_ASSESS_URL) {
-    console.error('❌ LAMBDA_ASSESS_URL not set');
-    return res.status(503).json({
-      error:   'Assessment service not configured',
-      message: 'Set LAMBDA_ASSESS_URL in environment variables.'
-    });
-  }
-  try {
-    const body = req.body;
-    console.log(`🩺 /api/assess → "${(body.symptoms||'').slice(0,60)}" answers=${(body.clarifyingAnswers||[]).length}`);
-    const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), 20000);
-    const upstream   = await fetch(`${LAMBDA_ASSESS_URL}/api/assess`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(body),
-      signal:  controller.signal,
-    });
-    clearTimeout(timeout);
-    const data = await upstream.json();
-    console.log(`✅ /api/assess ← needsClarification=${data.needsClarification} severity=${data.severityLevel}`);
-    res.status(upstream.status).json(data);
-  } catch (err) {
-    console.error('❌ /api/assess error:', err.message);
-    res.status(502).json({ error: 'Assessment service unreachable', message: err.message });
   }
 });
 
