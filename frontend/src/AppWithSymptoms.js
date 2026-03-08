@@ -225,8 +225,10 @@ function AppWithSymptoms() {
       return;
     }
 
-    const centerLat = parseFloat(pincodeResponse.data.latitude);
-    const centerLng = parseFloat(pincodeResponse.data.longitude);
+    const centerLat     = parseFloat(pincodeResponse.data.latitude);
+    const centerLng     = parseFloat(pincodeResponse.data.longitude);
+    const centerState   = pincodeResponse.data.state   || null;
+    const centerDistrict = pincodeResponse.data.district || null;
 
     setLoadingStep('searching');
 
@@ -236,7 +238,9 @@ function AppWithSymptoms() {
       longitude:     centerLng,
       severity:      assessment.severity,
       severityLevel: assessment.severityLevel,
-      specialties:   assessment.specialties
+      specialties:   assessment.specialties,
+      state:         centerState,
+      district:      centerDistrict,
     });
 
     const transformedFacilities = response.data.facilities.map(hospital => ({
