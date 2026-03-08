@@ -11,6 +11,80 @@ import {
 // API Base URL
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
+// ── SpeakButton: Polly voice readout for top hospital result ─
+function SpeakButton({ hospital, language, severityLevel, apiBase }) {
+  const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const audioRef              = useRef(null);
+
+  const buildText = () => {
+    const dist  = hospital.distance_km ? parseFloat(hospital.distance_km).toFixed(1) : '?';
+    const name  = hospital.name || 'the hospital';
+    const phone = hospital.emergency_num || hospital.telephone || hospital.mobile_number || null;
+    const isEm  = severityLevel === 'emergency';
+
+    if (language === 'hi') {
+      const phoneText = phone ? `Phone karein ${phone}.` : '';
+      return isEm
+        ? `Achintak sthiti. Sabse paas ka aspatal ${name}, ${dist} kilometre door hai. Emergency vibhag uplabdh hai. ${phoneText} Ambulance ke liye ek sau aath dialaein.`
+        : `Aspatal mila. Sabse paas: ${name}, ${dist} kilometre door. ${phoneText}`;
+    }
+    const phoneText = phone ? `Call ${phone}.` : '';
+    return isEm
+      ? `Emergency alert. Nearest hospital: ${name}, ${dist} kilometres away. Emergency department available. ${phoneText} Dial 1 0 8 for ambulance.`
+      : `Results found. Nearest hospital: ${name}, ${dist} kilometres away. ${phoneText}`;
+  };
+
+  const speak = async () => {
+    if (playing) {
+      audioRef.current?.pause();
+      setPlaying(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res  = await fetch(`${apiBase}/api/polly`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ text: buildText(), language }),
+      });
+      if (!res.ok) throw new Error(`Polly ${res.status}`);
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      if (audioRef.current) { audioRef.current.pause(); }
+      audioRef.current       = new Audio(url);
+      audioRef.current.onended = () => setPlaying(false);
+      audioRef.current.play();
+      setPlaying(true);
+    } catch (e) {
+      console.error('Polly error:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isEmergency = severityLevel === 'emergency';
+  const btnColor    = isEmergency ? '#dc2626' : '#2563eb';
+
+  return (
+    <button
+      onClick={speak}
+      title={language === 'hi' ? 'Hindi mein suno' : 'Listen to this result'}
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-semibold transition-all hover:opacity-90 active:scale-95"
+      style={{ background: btnColor, opacity: loading ? 0.7 : 1 }}
+    >
+      {loading ? (
+        <div className="w-3 h-3 rounded-full border-2 border-white border-t-transparent animate-spin" />
+      ) : (
+        <span className="material-symbols-outlined text-[14px]">
+          {playing ? 'stop_circle' : 'volume_up'}
+        </span>
+      )}
+      {loading ? '...' : playing ? 'Stop' : language === 'hi' ? 'सुनें' : 'Listen'}
+    </button>
+  );
+}
+
 function AppWithSymptoms() {
   // Phase management: 1 = landing page with pincode + symptoms, 2 = results
   const [currentPhase, setCurrentPhase] = useState(1);
@@ -42,6 +116,7 @@ function AppWithSymptoms() {
   const [stage1Cache, setStage1Cache]                 = useState(null);
   const [waitingForAnswers, setWaitingForAnswers]     = useState(false);
   const [loadingStep, setLoadingStep]                 = useState('');
+  const [pollyLanguage, setPollyLanguage]             = useState('en');
 
   // ── WhatsApp chat state ───────────────────────────────────────
   const [chatLog, setChatLog]       = useState([]);   // [{role:'bot'|'user', text}]
@@ -271,6 +346,7 @@ function AppWithSymptoms() {
       );
 
       setAssessmentResult(assessment);
+      if (assessment.detectedLanguage) setPollyLanguage(assessment.detectedLanguage);
 
       // Show emergency warning immediately
       if (assessment.isAutoEmergency) {
@@ -844,11 +920,7 @@ function AppWithSymptoms() {
                 <div className="flex items-center justify-center gap-3 py-2">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary" />
                   <span className="text-slate-600 text-sm font-medium">
-                    {loadingStep.startsWith('assessing') && (
-                      loadingStep.includes('/')
-                        ? `⏳ Retrying... (${loadingStep.match(/\((.+)\)/)?.[1]})`
-                        : '🩺 AI is analyzing your symptoms...'
-                    )}
+                    {loadingStep === 'assessing' && '🩺 AI is analyzing your symptoms...'}
                     {loadingStep === 'locating'  && '📍 Locating your area...'}
                     {loadingStep === 'searching' && '🏥 Finding the best hospitals...'}
                     {!loadingStep                && 'Loading...'}
@@ -937,17 +1009,6 @@ function AppWithSymptoms() {
           <div className="px-4 py-4 border-b space-y-4">
 
             {/* AI Reasoning Card */}
-            {assessmentResult?.fallbackMode && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-600 flex-shrink-0" style={{fontSize:'16px'}}>wifi_off</span>
-                <p className="text-xs text-amber-800 font-medium">
-                  {assessmentResult.retriesExhausted
-                    ? 'AI service unavailable after retries — results based on symptom keywords only.'
-                    : 'AI assessment unavailable — results based on symptom keywords only.'}
-                </p>
-              </div>
-            )}
-
             {assessmentResult?.reasoning && assessmentResult.assessmentMode !== 'fallback' && (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <div className="flex items-center gap-2 mb-1">
@@ -1129,6 +1190,14 @@ function AppWithSymptoms() {
                       <span className="text-xs text-slate-500">
                         📍 {hospital.distance_km ? parseFloat(hospital.distance_km).toFixed(1) : '?'} km away
                       </span>
+                      {index === 0 && (
+                        <SpeakButton
+                          hospital={hospital}
+                          language={pollyLanguage}
+                          severityLevel={assessmentResult.severityLevel}
+                          apiBase={API_BASE_URL}
+                        />
+                      )}
                     </div>
                     
                     <div className="flex flex-wrap gap-2">
