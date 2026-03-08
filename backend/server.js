@@ -185,7 +185,7 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
   });
   
   try {
-    const { latitude, longitude, severityLevel, specialties } = req.body;
+    const { latitude, longitude, severityLevel, specialties, state, district } = req.body;
     
     if (!latitude || !longitude || !severityLevel) {
       return res.status(400).json({ 
@@ -211,7 +211,9 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
       parseFloat(latitude),
       parseFloat(longitude),
       config,
-      normSpecialty
+      normSpecialty,
+      state || null,
+      district || null
     );
     
     console.log(`✅ Found ${searchResult.hospitals.length} hospitals within ${searchResult.radiusUsed}km`);
@@ -235,7 +237,7 @@ app.post('/api/hospitals/severity-based', async (req, res) => {
 /**
  * Helper function: Progressive search with radius expansion
  */
-async function queryWithExpansion(lat, lng, config, specialty) {
+async function queryWithExpansion(lat, lng, config, specialty, state, district) {
   const radii      = RADIUS_STEPS.filter(r => r >= config.initialRadius);
   const uniqueRadii = [...new Set(radii)];
 
@@ -252,6 +254,16 @@ async function queryWithExpansion(lat, lng, config, specialty) {
     ROUND((ST_Distance(location, ST_MakePoint($2, $1)::geography) / 1000)::numeric, 2) AS distance_km
   `;
 
+  // Geo-fence: reject hospitals whose coordinates are >1.5 degrees away from
+  // the search center — catches dirty data where pincode is wrong but coords
+  // happen to be near the search point due to coordinate errors in the DB.
+  // 1.5 degrees ≈ 165km — generous enough for large cities, strict enough to
+  // exclude Haryana hospitals appearing in Hyderabad searches.
+  const GEO_FENCE = `
+    AND ST_Y(location::geometry) BETWEEN $1 - 1.5 AND $1 + 1.5
+    AND ST_X(location::geometry) BETWEEN $2 - 1.5 AND $2 + 1.5
+  `;
+
   const runPass = async (radiusMetres, useSpecialty) => {
     let query, params;
 
@@ -264,6 +276,7 @@ async function queryWithExpansion(lat, lng, config, specialty) {
           AND emergency_available = TRUE
           AND location IS NOT NULL
           AND data_quality_norm >= 0.3
+          \${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
@@ -279,6 +292,7 @@ async function queryWithExpansion(lat, lng, config, specialty) {
           AND data_quality_norm >= 0.3
           AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
           AND specialties_array @> ARRAY[$5]
+          \${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
@@ -293,6 +307,7 @@ async function queryWithExpansion(lat, lng, config, specialty) {
           AND location IS NOT NULL
           AND data_quality_norm >= 0.3
           AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
+          \${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
       `;
