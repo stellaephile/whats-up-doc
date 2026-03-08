@@ -110,7 +110,7 @@ app.get('/api/hospitals/stats', async (req, res) => {
         COUNT(*) FILTER (WHERE emergency_available = TRUE)    AS emergency,
         COUNT(*) FILTER (WHERE ayush = TRUE)                  AS ayush,
         COUNT(*) FILTER (WHERE hospital_category ILIKE '%gov%') AS government,
-        COUNT(*) FILTER (WHERE data_quality_norm > 0)      AS quality_passed
+        COUNT(*) FILTER (WHERE data_quality_norm >= 0.3)      AS quality_passed
       FROM hospitals
     `);
     
@@ -288,7 +288,7 @@ async function queryWithExpansion(lat, lng, config, specialty, state, district) 
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND emergency_available = TRUE
           AND location IS NOT NULL
-          AND data_quality_norm > 0
+          AND data_quality_norm >= 0.3
           ${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
         LIMIT 20
@@ -302,7 +302,7 @@ async function queryWithExpansion(lat, lng, config, specialty, state, district) 
         FROM hospitals
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND location IS NOT NULL
-          AND data_quality_norm > 0
+          AND data_quality_norm >= 0.3
           AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
           AND specialties_array @> ARRAY[$5]
           ${GEO_FENCE}
@@ -318,7 +318,7 @@ async function queryWithExpansion(lat, lng, config, specialty, state, district) 
         FROM hospitals
         WHERE ST_DWithin(location, ST_MakePoint($2, $1)::geography, $3)
           AND location IS NOT NULL
-          AND data_quality_norm > 0
+          AND data_quality_norm >= 0.3
           AND (hospital_care_type = ANY($4) OR hospital_care_type IS NULL)
           ${GEO_FENCE}
         ORDER BY location <-> ST_MakePoint($2, $1)::geography
