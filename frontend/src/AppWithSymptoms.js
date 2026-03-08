@@ -511,11 +511,15 @@ function AppWithSymptoms() {
       setMap(null);
     }
 
+    const targetZoom = radius <= 3 ? 14 : radius <= 5 ? 13 : radius <= 10 ? 12 : 11;
+
+    // Start at India level so the fly-in animation is visible
     const newMap = window.L.map('care-map', {
-      center: [centerLat, centerLng],
-      zoom: radius <= 3 ? 14 : radius <= 5 ? 13 : radius <= 10 ? 12 : 11,
+      center: [20.5937, 78.9629],
+      zoom: 5,
       zoomControl: false,
-      attributionControl: true
+      attributionControl: true,
+      zoomAnimation: true,
     });
     
     window.L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
@@ -591,10 +595,20 @@ function AppWithSymptoms() {
     setMap(newMap);
     markersRef.current = newMarkers;
 
-    if (newMarkers.length > 0) {
-      const group = new window.L.featureGroup(newMarkers);
-      newMap.fitBounds(group.getBounds().pad(0.2));
-    }
+    // Animate from India level → data extent
+    setTimeout(() => {
+      if (newMarkers.length > 0) {
+        const group  = new window.L.featureGroup(newMarkers);
+        const bounds = group.getBounds().pad(0.25);
+        newMap.flyToBounds(bounds, {
+          maxZoom:      targetZoom,
+          duration:     1.8,
+          easeLinearity: 0.4,
+        });
+      } else {
+        newMap.flyTo([centerLat, centerLng], targetZoom, { duration: 1.8 });
+      }
+    }, 150);
   };
 
   const handleBackToPhase1 = () => {
@@ -1231,7 +1245,14 @@ function AppWithSymptoms() {
                           <span key={i} className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full">{s}</span>
                         ))}
                         {hospital.specialties.length > 3 && (
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full">+{hospital.specialties.length - 3} more</span>
+                          <span className="relative px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] rounded-full cursor-pointer group border border-blue-200 hover:bg-blue-100 transition-colors select-none">
+                            +{hospital.specialties.length - 3} more
+                            <span className="pointer-events-none absolute bottom-full left-0 mb-2 hidden group-hover:flex flex-wrap gap-1 bg-white border border-slate-200 rounded-xl shadow-2xl p-2.5 z-50 w-60">
+                              {hospital.specialties.slice(3).map((s, i) => (
+                                <span key={i} className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full whitespace-nowrap">{s}</span>
+                              ))}
+                            </span>
+                          </span>
                         )}
                       </div>
                     )}
