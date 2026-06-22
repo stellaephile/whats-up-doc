@@ -19,7 +19,7 @@ Built with ❤️ using **Kiro** · **AWS Bedrock** · **Amazon Polly** · **Pos
 
 ## ✅ Try the Prototype
 
-### Case 1 — Normal Symptoms
+### Case 1 - Normal Symptoms
 1. Open the frontend URL above
 2. Enter pincode **`560001`** (Bengaluru)
 3. Type symptoms: `high fever and joint pain for 3 days`
@@ -27,30 +27,30 @@ Built with ❤️ using **Kiro** · **AWS Bedrock** · **Amazon Polly** · **Pos
 5. See severity assessment → nearest hospitals on map
 6. Listen to Polly read out the top result
 
-### Case 2 — Emergency (Hindi)
+### Case 2 - Emergency (Hindi)
 1. Enter pincode **`400001`** (Mumbai)
 2. Toggle **Emergency SOS** button ON
 3. Type: `seena mein dard saans nahi aa raha`
-4. See instant emergency routing — no AI delay
+4. See instant emergency routing - no AI delay
 5. Red banner + Call 108 button + Polly speaks in Hindi
 
-### Case 3 — AYUSH / Ayurveda
+### Case 3 - AYUSH / Ayurveda
 1. Enter any pincode
 2. Type: `ayurveda treatment for back pain`
-3. See 🌿 green AYUSH banner — AYUSH hospitals shown first
+3. See 🌿 green AYUSH banner - AYUSH hospitals shown first
 
-> **Note:** If you see an SSL warning on the API, open [https://whats-up-doc.ap-south-1.elasticbeanstalk.com/health](https://whats-up-doc.ap-south-1.elasticbeanstalk.com/health) in your browser first and click **Advanced → Proceed**. This is a known issue with the EB self-signed certificate — fix in progress.
+> **Note:** If you see an SSL warning on the API, open [https://whats-up-doc.ap-south-1.elasticbeanstalk.com/health](https://whats-up-doc.ap-south-1.elasticbeanstalk.com/health) in your browser first and click **Advanced → Proceed**. This is a known issue with the EB self-signed certificate - fix in progress.
 
 ---
 
 ## 🚀 Overview
 
-**What's Up Doc** is an intelligent healthcare navigation platform that helps patients in India find the *right level of care* based on their symptoms — not just the nearest hospital.
+**What's Up Doc** is an intelligent healthcare navigation platform that helps patients in India find the *right level of care* based on their symptoms - not just the nearest hospital.
 
 Instead of diagnosing diseases, the system:
 
 - Assesses symptom severity using two-stage AI (Claude Haiku → Claude 3.5 Haiku)
-- Detects emergencies instantly — in Hindi, English, and Hinglish
+- Detects emergencies instantly - in Hindi, English, and Hinglish
 - Routes users to the appropriate care level (PHC / Clinic / Hospital / Emergency)
 - Speaks results aloud using Amazon Polly's Kajal Neural voice
 - Searches across **30,272 verified hospitals** across India
@@ -65,15 +65,15 @@ Instead of diagnosing diseases, the system:
 ## 🧠 Key Features
 
 ### 1️⃣ Two-Stage AI Assessment
-- **Stage 1 — Claude Haiku:** triage, language detection, emergency check, clarifying questions
-- **Stage 2 — Claude 3.5 Haiku:** severity scoring (1–10), department mapping, recommended action
+- **Stage 1 - Claude Haiku:** triage, language detection, emergency check, clarifying questions
+- **Stage 2 - Claude 3.5 Haiku:** severity scoring (1–10), department mapping, recommended action
 - Supports Hindi / English / Hinglish natively
 - Never provides medical diagnosis
 
 ### 2️⃣ Emergency Detection
 - Real-time Hindi + English keyword detection (client-side, zero latency)
 - 20+ hardcoded emergency terms: `seena dard`, `prasav dard`, `behosh`, `dil ka daura` and more
-- Skips AI entirely for emergencies — saves 3–4 seconds
+- Skips AI entirely for emergencies - saves 3–4 seconds
 - Routes only to 24×7 emergency-capable facilities
 - Displays ambulance number (108) prominently
 
@@ -86,11 +86,11 @@ Instead of diagnosing diseases, the system:
 | High | Hospital, Medical College | 10 km |
 | Emergency | Emergency only (24×7) | 10–20 km |
 
-Auto-expands radius if no results found — up to 20 km.
+Auto-expands radius if no results found - up to 20 km.
 
 ### 4️⃣ Amazon Polly Voice (Bilingual)
-- Kajal Neural voice — sounds natural in both English and Hindi
-- Auto-plays on results load — no button needed
+- Kajal Neural voice - sounds natural in both English and Hindi
+- Auto-plays on results load - no button needed
 - Emergency: *"Achintak sthiti. Sabse paas ka aspatal hai..."*
 - Normal: *"We found the best match for you. [Hospital] is X km away."*
 
@@ -154,7 +154,7 @@ AWS RDS PostgreSQL + PostGIS
 
 ## 🔐 Privacy & Safety
 
-- No user accounts required — fully anonymous
+- No user accounts required - fully anonymous
 - No symptom data stored after session
 - Clear disclaimer on every result: *"Not a medical diagnosis. Consult a healthcare provider."*
 - Emergency detection always errs on the side of caution
@@ -200,10 +200,10 @@ npm start              # runs on :3000
 In India:
 - Patients visit expensive private hospitals for minor issues that a PHC could handle
 - Facilities often lack required specialization for the actual condition
-- Emergency response delays cost lives — especially when patients don't know which hospital to go to
-- Language barrier — most health apps only work in English
+- Emergency response delays cost lives - especially when patients don't know which hospital to go to
+- Language barrier - most health apps only work in English
 
-**What's Up Doc bridges that gap — in the user's own language, instantly.**
+**What's Up Doc bridges that gap - in the user's own language, instantly.**
 
 ---
 
